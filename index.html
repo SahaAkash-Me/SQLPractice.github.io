@@ -1478,8 +1478,8 @@ let currentDialect = 'sqlite';
 
 const DIALECT_PLACEHOLDERS = {
   sqlite: `-- SQLite mode\n-- Ctrl+Enter = Run  |  Select text → Run selection  |  Ctrl+Shift+Enter = Submit\n-- Example: SELECT * FROM Customers;`,
-  mysql:  `-- MySQL mode — syntax auto-translated to SQLite engine\n-- ✅ Supported: YEAR() MONTH() DAY() IFNULL() DATE_FORMAT() NOW() CURDATE()\n--              CONCAT() DATEDIFF() IF() LEFT() RIGHT() CHAR_LENGTH()\n--              DATE_ADD/SUB INTERVAL  LIMIT offset,count  backticks\n-- Example: SELECT * FROM Customers WHERE YEAR(JoinDate) = 2021;`,
-  mssql:  `-- MSSQL mode — syntax auto-translated to SQLite engine\n-- ✅ Supported: TOP N  ISNULL() LEN() GETDATE() DATEDIFF(day,d1,d2)\n--              DATEPART() DATEADD() YEAR() MONTH() DAY() FORMAT()\n--              CONVERT() SUBSTRING() CHARINDEX() CONCAT() STRING_AGG()\n--              OFFSET n ROWS FETCH NEXT n ROWS ONLY  [bracket] identifiers\n-- Example: SELECT TOP 5 * FROM Orders ORDER BY Sales DESC;`
+  mysql:  `-- MySQL mode — auto-translated to SQLite engine\n-- ✅ YEAR() MONTH() DAY() HOUR() MINUTE() QUARTER() WEEK() DAYOFWEEK()\n-- ✅ NOW() CURDATE() CURTIME() SYSDATE()\n-- ✅ DATE_FORMAT() DATEDIFF() TIMESTAMPDIFF() DATE_ADD/SUB INTERVAL\n-- ✅ IFNULL() IF() CONCAT() CONCAT_WS() GROUP_CONCAT(x SEPARATOR y)\n-- ✅ LEFT() RIGHT() MID() SUBSTRING() CHAR_LENGTH() LOCATE() LPAD() RPAD()\n-- ✅ CEILING() MOD() TRUNCATE() FIELD() CAST(x AS SIGNED/UNSIGNED)\n-- ✅ INSERT IGNORE  REPLACE INTO  ON DUPLICATE KEY UPDATE\n-- ✅ Backtick identifiers  LIMIT offset,count\n-- Example: SELECT YEAR(JoinDate), COUNT(*) FROM Customers GROUP BY 1;`,
+  mssql:  `-- MSSQL (T-SQL) mode — auto-translated to SQLite engine\n-- ✅ SELECT TOP N  OFFSET n ROWS FETCH NEXT n ROWS ONLY\n-- ✅ ISNULL() IIF() TRY_CAST() TRY_CONVERT() CHOOSE()\n-- ✅ LEN() CHARINDEX() SUBSTRING() LEFT() RIGHT() STUFF() REPLICATE() SPACE()\n-- ✅ GETDATE() GETUTCDATE() SYSDATETIME() EOMONTH()\n-- ✅ YEAR() MONTH() DAY() DATEPART() DATEADD() DATEDIFF() FORMAT()\n-- ✅ CONVERT()  STRING_AGG()  CONCAT()\n-- ✅ [bracket] identifiers  dbo.schema prefix  GO/USE/SET NOCOUNT\n-- ✅ DECLARE @var / SET @var stripped  PRINT stripped\n-- ✅ + string concatenation → ||\n-- Example: SELECT TOP 5 * FROM Orders ORDER BY Sales DESC;`
 };
 
 function setDialect(d, el){
@@ -1489,21 +1489,45 @@ function setDialect(d, el){
   document.getElementById('editor').placeholder = DIALECT_PLACEHOLDERS[d];
 }
 
-/* ── MSSQL: handle SELECT TOP N → LIMIT N ── */
+/* ═══ HELPERS ═══ */
+
+/* Handle SELECT TOP N → appends LIMIT N */
 function handleTOP(sql){
-  const re = /\bSELECT\s+TOP\s*\(?\s*(\d+)\s*\)?\s+/i;
-  const m = sql.match(re);
-  if(!m) return sql;
-  const n = m[1];
-  let s = sql.replace(re, 'SELECT ');
-  const hasSemi = /;\s*$/.test(s.trimEnd());
-  s = s.replace(/\s*;\s*$/, '').trimEnd();
-  return s + ` LIMIT ${n}` + (hasSemi ? ';' : '');
+  // Handles: SELECT TOP 5, SELECT TOP(5), SELECT TOP 5 PERCENT (ignored as %)
+  return sql.replace(/\bSELECT\s+TOP\s*\(?\s*(\d+)\s*\)?\s+/gi, (_, n) => `SELECT /*__TOP${n}__*/ `);
+}
+function applyTOP(sql){
+  // After all transforms, convert TOP markers to LIMIT at end of statement
+  return sql.replace(/SELECT\s+\/\*__TOP(\d+)__\*\/\s+/gi, (_, n) => {
+    return `SELECT `;
+  }).replace(/;?\s*$/, m => {
+    const tops = [...sql.matchAll(/\/\*__TOP(\d+)__\*\//gi)];
+    if(!tops.length) return m;
+    return ` LIMIT ${tops[tops.length-1][1]}` + (m.trim()===';'?';':'');
+  });
+}
+function handleTOPFull(sql){
+  const re = /\bSELECT\s+TOP\s*\(?\s*(\d+)\s*\)?\s+/gi;
+  const found = [...sql.matchAll(re)];
+  if(!found.length) return sql;
+  let s = sql;
+  // Process each TOP from last to first to preserve positions
+  for(let i = found.length-1; i>=0; i--){
+    const m = found[i];
+    const n = m[1];
+    const pre = s.substring(0, m.index);
+    const after = s.substring(m.index + m[0].length);
+    // Find end of this statement (next semicolon or end of string)
+    const semiIdx = after.search(/;/);
+    const stmtBody = semiIdx === -1 ? after : after.substring(0, semiIdx);
+    const rest = semiIdx === -1 ? '' : after.substring(semiIdx);
+    s = pre + 'SELECT ' + stmtBody.trimEnd() + ` LIMIT ${n}` + rest;
+  }
+  return s;
 }
 
-/* ── CONCAT(a,b,c) → a || b || c  (handles nested parens) ── */
+/* CONCAT(a,b,c) → a || b || c  iteratively from innermost */
 function translateCONCAT(sql){
-  // Iteratively replace CONCAT(...) from innermost outward
   let prev;
   do {
     prev = sql;
@@ -1514,242 +1538,394 @@ function translateCONCAT(sql){
   return sql;
 }
 
-/* ── Main translation function ── */
-function translateSQL(sql, dialect){
-  if(dialect === 'sqlite') return { sql, changed: false };
-  let s = sql;
+/* MSSQL + string concat: 'a' + 'b' → 'a' || 'b'
+   Only replaces + when adjacent to string literals or known string expressions */
+function translatePlusConcat(sql){
+  // Replace + between string literals
+  sql = sql.replace(/'([^']*)'\s*\+\s*'([^']*)'/g, "'$1' || '$2'");
+  // Replace + adjacent to string literal and identifier/expression
+  sql = sql.replace(/'([^']*)'\s*\+\s*([\w.]+)/g, "'$1' || $2");
+  sql = sql.replace(/([\w.]+)\s*\+\s*'([^']*)'/g, "$1 || '$2'");
+  return sql;
+}
 
-  /* ════════════ MSSQL ════════════ */
+/* Strip DECLARE / SET @variable lines (MSSQL variables not supported) */
+function stripVariables(sql){
+  // Strip DECLARE @var TYPE [= val];
+  sql = sql.replace(/^\s*DECLARE\s+@\w+[^\n;]*(;|\n|$)/gim, '');
+  // Strip SET @var = expression;
+  sql = sql.replace(/^\s*SET\s+@\w+\s*=[^\n;]*(;|\n|$)/gim, '');
+  // Replace @variable references with NULL (can't resolve them)
+  sql = sql.replace(/@\w+/g, 'NULL');
+  return sql;
+}
+
+/* ═══ MAIN TRANSLATION ═══ */
+function translateSQL(rawSql, dialect){
+  if(dialect === 'sqlite') return { sql: rawSql, changed: false, warnings: [] };
+  let s = rawSql;
+  const warnings = [];
+
+  /* ════════════════════════════════════════
+     MSSQL / T-SQL → SQLite
+  ════════════════════════════════════════ */
   if(dialect === 'mssql'){
-    // [bracket] identifiers → plain names
+
+    // ── Strip T-SQL non-query statements ──
+    s = s.replace(/^\s*GO\s*$/gim, '');
+    s = s.replace(/^\s*USE\s+[\w\[\].]+\s*;?\s*$/gim, '');
+    s = s.replace(/^\s*SET\s+NOCOUNT\s+ON\s*;?\s*$/gim, '');
+    s = s.replace(/^\s*SET\s+ANSI_NULLS\s+\w+\s*;?\s*$/gim, '');
+    s = s.replace(/^\s*SET\s+QUOTED_IDENTIFIER\s+\w+\s*;?\s*$/gim, '');
+    s = s.replace(/^\s*SET\s+TRANSACTION\s+ISOLATION\s+LEVEL[^\n]+$/gim, '');
+    s = s.replace(/^\s*PRINT\s+[^\n;]+(;|\n|$)/gim, '');
+
+    // ── Variable declarations (strip them) ──
+    s = stripVariables(s);
+
+    // ── [bracket] identifiers → plain names ──
     s = s.replace(/\[(\w[\w\s]*)\]/g, (_, n) => n.trim().replace(/\s+/g,'_'));
 
-    // TOP N (must happen before other transforms)
-    s = handleTOP(s);
+    // ── schema.table prefix (dbo.Orders → Orders) ──
+    s = s.replace(/\b(\w+)\.(Orders|Customers|Products|Employees|OrdersArchive)\b/gi, '$2');
 
-    // OFFSET … FETCH (pagination)
+    // ── SELECT TOP N → LIMIT N ──
+    s = handleTOPFull(s);
+
+    // ── LIMIT is NOT valid MSSQL — warn user ──
+    // (if user still wrote LIMIT themselves, warn but let it pass since engine is SQLite)
+    if(/\bLIMIT\b/i.test(rawSql) && !/\bTOP\b/i.test(rawSql)){
+      warnings.push('⚠️ <strong>LIMIT</strong> is not valid MSSQL syntax. Use <code>SELECT TOP N</code> or <code>OFFSET n ROWS FETCH NEXT n ROWS ONLY</code>.');
+    }
+
+    // ── Pagination: OFFSET n ROWS FETCH NEXT n ROWS ONLY ──
+    s = s.replace(/\bORDER\s+BY\s+([\s\S]*?)\s+OFFSET\s+(\d+)\s+ROWS?\s+FETCH\s+NEXT\s+(\d+)\s+ROWS?\s+ONLY\b/gi,
+                  (_, ob, off, lim) => `ORDER BY ${ob} LIMIT ${lim} OFFSET ${off}`);
+    // Handle OFFSET alone (without FETCH)
     s = s.replace(/\bOFFSET\s+(\d+)\s+ROWS?\s+FETCH\s+NEXT\s+(\d+)\s+ROWS?\s+ONLY\b/gi,
                   (_, off, lim) => `LIMIT ${lim} OFFSET ${off}`);
 
-    // NULL functions
+    // ── NULL / conditional functions ──
     s = s.replace(/\bISNULL\s*\(/gi, 'COALESCE(');
-    s = s.replace(/\bNULLIF\s*\(/gi, 'NULLIF('); // already supported
+    s = s.replace(/\bNVL\s*\(/gi, 'COALESCE(');
+    // IIF(condition, true_val, false_val)
+    s = s.replace(/\bIIF\s*\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, cond, t, f) => `CASE WHEN ${cond.trim()} THEN ${t.trim()} ELSE ${f.trim()} END`);
+    // CHOOSE(index, val1, val2, ...)
+    s = s.replace(/\bCHOOSE\s*\(([^)]+)\)/gi, (_, args) => {
+      const parts = args.split(',').map(a => a.trim());
+      const idx = parts[0];
+      const vals = parts.slice(1);
+      const cases = vals.map((v, i) => `WHEN ${i+1} THEN ${v}`).join(' ');
+      return `CASE ${idx} ${cases} END`;
+    });
 
-    // String functions
+    // ── String functions ──
     s = s.replace(/\bLEN\s*\(/gi, 'LENGTH(');
     s = s.replace(/\bSUBSTRING\s*\(/gi, 'SUBSTR(');
-    s = s.replace(/\bCHARINDEX\s*\(\s*([^,]+?)\s*,\s*([^,)]+?)\s*\)/gi,
+    // CHARINDEX(substr, str[, start]) → INSTR(str, substr)
+    s = s.replace(/\bCHARINDEX\s*\(\s*([^,]+?)\s*,\s*([^,)]+?)\s*(?:,\s*[^)]+?)?\s*\)/gi,
                   (_, sub, str) => `INSTR(${str.trim()},${sub.trim()})`);
     s = s.replace(/\bLEFT\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, str, n) => `SUBSTR(${str.trim()},1,${n.trim()})`);
     s = s.replace(/\bRIGHT\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, str, n) => `SUBSTR(${str.trim()},-CAST(${n.trim()} AS INTEGER))`);
-    s = translateCONCAT(s);
-    s = s.replace(/\bSTRING_AGG\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+    // STUFF(str, start, len, replacement) → SUBSTR(str,1,start-1)||replacement||SUBSTR(str,start+len)
+    s = s.replace(/\bSTUFF\s*\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, str, st, ln, rep) =>
+                  `(SUBSTR(${str.trim()},1,(${st.trim()})-1)||${rep.trim()}||SUBSTR(${str.trim()},(${st.trim()})+(${ln.trim()})))`);
+    // REPLICATE(str, n) → use printf trick
+    s = s.replace(/\bREPLICATE\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, str, n) => `REPLACE(PRINTF('%.'||CAST((${n.trim()}) AS INTEGER)||'c','x'),PRINTF('%c','x'),${str.trim()})`);
+    // SPACE(n)
+    s = s.replace(/\bSPACE\s*\(\s*([^)]+?)\s*\)/gi,
+                  (_, n) => `REPLACE(PRINTF('%.'||CAST((${n.trim()}) AS INTEGER)||'c','x'),PRINTF('%c','x'),' ')`);
+    // PATINDEX('%pat%', str) → not fully translatable, approximate with INSTR
+    s = s.replace(/\bPATINDEX\s*\(\s*'%([^%']*)%'\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, pat, str) => `INSTR(${str.trim()},'${pat}')`);
+    // STRING_AGG(col, sep) → GROUP_CONCAT(col, sep)
+    s = s.replace(/\bSTRING_AGG\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)(?:\s+WITHIN\s+GROUP\s*\([^)]*\))?/gi,
                   (_, col, sep) => `GROUP_CONCAT(${col.trim()},${sep.trim()})`);
+    // CONCAT
+    s = translateCONCAT(s);
+    // + string concatenation → ||
+    s = translatePlusConcat(s);
+    // LTRIM / RTRIM (same in SQLite)
+    s = s.replace(/\bLTRIM\s*\(/gi, 'LTRIM(');
+    s = s.replace(/\bRTRIM\s*\(/gi, 'RTRIM(');
 
-    // Date/time functions
+    // ── TRY_CAST / TRY_CONVERT → CAST ──
+    s = s.replace(/\bTRY_CAST\s*\(/gi, 'CAST(');
+    s = s.replace(/\bTRY_CONVERT\s*\(\s*(?:INT|INTEGER|BIGINT|SMALLINT|TINYINT)\s*,\s*([^,)]+)[^)]*\)/gi,
+                  (_, v) => `CAST(${v.trim()} AS INTEGER)`);
+    s = s.replace(/\bTRY_CONVERT\s*\(\s*(?:FLOAT|REAL|DECIMAL|NUMERIC|MONEY)(?:\s*\([^)]*\))?\s*,\s*([^,)]+)[^)]*\)/gi,
+                  (_, v) => `CAST(${v.trim()} AS REAL)`);
+    s = s.replace(/\bTRY_CONVERT\s*\(\s*(?:VARCHAR|NVARCHAR|CHAR|NCHAR|TEXT)(?:\s*\([^)]*\))?\s*,\s*([^,)]+)[^)]*\)/gi,
+                  (_, v) => `CAST(${v.trim()} AS TEXT)`);
+
+    // ── CONVERT(type, val[, style]) ──
+    s = s.replace(/\bCONVERT\s*\(\s*(?:INT|INTEGER|BIGINT|SMALLINT|TINYINT)\s*,\s*([^,)]+?)\s*(?:,\s*\d+\s*)?\)/gi,
+                  (_, v) => `CAST(${v.trim()} AS INTEGER)`);
+    s = s.replace(/\bCONVERT\s*\(\s*(?:FLOAT|REAL|DECIMAL|NUMERIC|MONEY)(?:\s*\([^)]*\))?\s*,\s*([^,)]+?)\s*(?:,\s*\d+\s*)?\)/gi,
+                  (_, v) => `CAST(${v.trim()} AS REAL)`);
+    s = s.replace(/\bCONVERT\s*\(\s*(?:VARCHAR|NVARCHAR|CHAR|NCHAR|TEXT)(?:\s*\([^)]*\))?\s*,\s*([^,)]+?)\s*(?:,\s*\d+\s*)?\)/gi,
+                  (_, v) => `CAST(${v.trim()} AS TEXT)`);
+    s = s.replace(/\bCONVERT\s*\(\s*DATE\s*,\s*([^,)]+?)\s*(?:,\s*\d+\s*)?\)/gi,
+                  (_, v) => `DATE(${v.trim()})`);
+
+    // ── Date / time functions ──
     s = s.replace(/\bGETDATE\s*\(\s*\)/gi, "DATE('now')");
     s = s.replace(/\bGETUTCDATE\s*\(\s*\)/gi, "DATETIME('now')");
     s = s.replace(/\bSYSDATETIME\s*\(\s*\)/gi, "DATETIME('now')");
     s = s.replace(/\bSYSDATEONLY\s*\(\s*\)/gi, "DATE('now')");
+    s = s.replace(/\bCURRENT_TIMESTAMP\b/gi, "DATETIME('now')");
 
-    s = s.replace(/\bYEAR\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%Y',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bMONTH\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%m',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bDAY\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%d',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bEOMONTH\s*\(([^)]+)\)/gi,
-                  (_, a) => `DATE(${a.trim()},'+1 month','start of month','-1 day')`);
+    s = s.replace(/\bYEAR\s*\(([^)]+)\)/gi,  (_, a) => `CAST(strftime('%Y',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bMONTH\s*\(([^)]+)\)/gi, (_, a) => `CAST(strftime('%m',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bDAY\s*\(([^)]+)\)/gi,   (_, a) => `CAST(strftime('%d',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bEOMONTH\s*\(([^)]+)\)/gi,(_, a) => `DATE(${a.trim()},'+1 month','start of month','-1 day')`);
 
     // DATEDIFF(unit, start, end)
+    s = s.replace(/\bDATEDIFF\s*\(\s*(?:year|yy|yyyy)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/365.25 AS INTEGER)`);
+    s = s.replace(/\bDATEDIFF\s*\(\s*(?:quarter|qq|q)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/91.25 AS INTEGER)`);
+    s = s.replace(/\bDATEDIFF\s*\(\s*(?:month|mm|m)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/30.44 AS INTEGER)`);
+    s = s.replace(/\bDATEDIFF\s*\(\s*(?:week|wk|ww)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/7 AS INTEGER)`);
     s = s.replace(/\bDATEDIFF\s*\(\s*(?:day|dd|d)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, d1, d2) => `CAST(julianday(${d2.trim()})-julianday(${d1.trim()}) AS INTEGER)`);
-    s = s.replace(/\bDATEDIFF\s*\(\s*(?:month|mm|m)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/30 AS INTEGER)`);
-    s = s.replace(/\bDATEDIFF\s*\(\s*(?:year|yy|yyyy)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/365 AS INTEGER)`);
     s = s.replace(/\bDATEDIFF\s*\(\s*(?:hour|hh)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))*24 AS INTEGER)`);
+    s = s.replace(/\bDATEDIFF\s*\(\s*(?:minute|mi|n)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))*1440 AS INTEGER)`);
+    s = s.replace(/\bDATEDIFF\s*\(\s*(?:second|ss|s)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))*86400 AS INTEGER)`);
 
     // DATEADD(unit, n, date)
-    s = s.replace(/\bDATEADD\s*\(\s*(?:day|dd|d)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, n, d) => `DATE(${d.trim()},'+' || (${n.trim()}) || ' days')`);
-    s = s.replace(/\bDATEADD\s*\(\s*(?:month|mm|m)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, n, d) => `DATE(${d.trim()},'+' || (${n.trim()}) || ' months')`);
     s = s.replace(/\bDATEADD\s*\(\s*(?:year|yy|yyyy)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, n, d) => `DATE(${d.trim()},'+' || (${n.trim()}) || ' years')`);
+    s = s.replace(/\bDATEADD\s*\(\s*(?:month|mm|m)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, n, d) => `DATE(${d.trim()},'+' || (${n.trim()}) || ' months')`);
+    s = s.replace(/\bDATEADD\s*\(\s*(?:week|wk|ww)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, n, d) => `DATE(${d.trim()},'+' || ((${n.trim()})*7) || ' days')`);
+    s = s.replace(/\bDATEADD\s*\(\s*(?:day|dd|d)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, n, d) => `DATE(${d.trim()},'+' || (${n.trim()}) || ' days')`);
+    s = s.replace(/\bDATEADD\s*\(\s*(?:hour|hh)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, n, d) => `DATETIME(${d.trim()},'+' || (${n.trim()}) || ' hours')`);
+    s = s.replace(/\bDATEADD\s*\(\s*(?:minute|mi|n)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, n, d) => `DATETIME(${d.trim()},'+' || (${n.trim()}) || ' minutes')`);
+    s = s.replace(/\bDATEADD\s*\(\s*(?:second|ss|s)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, n, d) => `DATETIME(${d.trim()},'+' || (${n.trim()}) || ' seconds')`);
 
-    // DATEPART(unit, date)
-    s = s.replace(/\bDATEPART\s*\(\s*(?:year|yy|yyyy)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, a) => `CAST(strftime('%Y',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bDATEPART\s*\(\s*(?:month|mm|m)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, a) => `CAST(strftime('%m',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bDATEPART\s*\(\s*(?:day|dd|d)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, a) => `CAST(strftime('%d',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bDATEPART\s*\(\s*(?:quarter|qq|q)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, a) => `((CAST(strftime('%m',${a.trim()}) AS INTEGER)-1)/3+1)`);
-    s = s.replace(/\bDATEPART\s*\(\s*(?:week|wk|ww)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, a) => `CAST(strftime('%W',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bDATEPART\s*\(\s*(?:weekday|dw)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, a) => `(CAST(strftime('%w',${a.trim()}) AS INTEGER)+1)`);
-    s = s.replace(/\bDATEPART\s*\(\s*(?:hour|hh)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, a) => `CAST(strftime('%H',${a.trim()}) AS INTEGER)`);
+    // DATEPART(unit, date) — all units
+    s = s.replace(/\bDATEPART\s*\(\s*(?:year|yy|yyyy)\s*,\s*([^)]+?)\s*\)/gi,  (_, a) => `CAST(strftime('%Y',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bDATEPART\s*\(\s*(?:quarter|qq|q)\s*,\s*([^)]+?)\s*\)/gi,  (_, a) => `((CAST(strftime('%m',${a.trim()}) AS INTEGER)-1)/3+1)`);
+    s = s.replace(/\bDATEPART\s*\(\s*(?:month|mm|m)\s*,\s*([^)]+?)\s*\)/gi,    (_, a) => `CAST(strftime('%m',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bDATEPART\s*\(\s*(?:day|dd|d)\s*,\s*([^)]+?)\s*\)/gi,      (_, a) => `CAST(strftime('%d',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bDATEPART\s*\(\s*(?:week|wk|ww)\s*,\s*([^)]+?)\s*\)/gi,    (_, a) => `CAST(strftime('%W',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bDATEPART\s*\(\s*(?:weekday|dw)\s*,\s*([^)]+?)\s*\)/gi,    (_, a) => `(CAST(strftime('%w',${a.trim()}) AS INTEGER)+1)`);
+    s = s.replace(/\bDATEPART\s*\(\s*(?:hour|hh)\s*,\s*([^)]+?)\s*\)/gi,       (_, a) => `CAST(strftime('%H',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bDATEPART\s*\(\s*(?:minute|mi|n)\s*,\s*([^)]+?)\s*\)/gi,   (_, a) => `CAST(strftime('%M',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bDATEPART\s*\(\s*(?:second|ss|s)\s*,\s*([^)]+?)\s*\)/gi,   (_, a) => `CAST(strftime('%S',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bDATEPART\s*\(\s*(?:dayofyear|dy|y)\s*,\s*([^)]+?)\s*\)/gi,(_, a) => `CAST(strftime('%j',${a.trim()}) AS INTEGER)`);
 
-    // FORMAT(value, fmt)
-    s = s.replace(/\bFORMAT\s*\(\s*([^,]+?)\s*,\s*'([^']+)'\s*\)/gi, (_, col, fmt) => {
+    // FORMAT(value, 'fmt') — date format
+    s = s.replace(/\bFORMAT\s*\(\s*([^,]+?)\s*,\s*'([^']+)'\s*(?:,\s*'[^']+'\s*)?\)/gi, (_, col, fmt) => {
       const f = fmt.replace(/yyyy/gi,'%Y').replace(/yy/gi,'%y')
                    .replace(/MM/g,'%m').replace(/dd/gi,'%d')
                    .replace(/HH/gi,'%H').replace(/mm/g,'%M').replace(/ss/gi,'%S');
       return `strftime('${f}',${col.trim()})`;
     });
 
-    // CONVERT(type, val) / CONVERT(type, val, style)
-    s = s.replace(/\bCONVERT\s*\(\s*(?:INT|INTEGER|BIGINT|SMALLINT|TINYINT)\s*,\s*([^,)]+)[^)]*\)/gi,
-                  (_, v) => `CAST(${v.trim()} AS INTEGER)`);
-    s = s.replace(/\bCONVERT\s*\(\s*(?:FLOAT|REAL|DECIMAL|NUMERIC|MONEY)(?:\s*\([^)]*\))?\s*,\s*([^,)]+)[^)]*\)/gi,
-                  (_, v) => `CAST(${v.trim()} AS REAL)`);
-    s = s.replace(/\bCONVERT\s*\(\s*(?:VARCHAR|NVARCHAR|CHAR|NCHAR|TEXT)(?:\s*\([^)]*\))?\s*,\s*([^,)]+)[^)]*\)/gi,
-                  (_, v) => `CAST(${v.trim()} AS TEXT)`);
-
-    // Data types (for CREATE TABLE)
+    // ── Data types ──
     s = s.replace(/\bNVARCHAR\s*\(\s*(?:MAX|\d+)\s*\)/gi, 'TEXT');
-    s = s.replace(/\bVARCHAR\s*\(\s*(?:MAX|\d+)\s*\)/gi, 'TEXT');
-    s = s.replace(/\bNCHAR\s*\(\s*\d+\s*\)/gi, 'TEXT');
-    s = s.replace(/\bCHAR\s*\(\s*\d+\s*\)/gi, 'TEXT');
+    s = s.replace(/\bVARCHAR\s*\(\s*(?:MAX|\d+)\s*\)/gi,  'TEXT');
+    s = s.replace(/\bNCHAR\s*\(\s*\d+\s*\)/gi,            'TEXT');
+    s = s.replace(/\bCHAR\s*\(\s*\d+\s*\)/gi,             'TEXT');
     s = s.replace(/\bNVARCHAR\b/gi, 'TEXT');
-    s = s.replace(/\bBIGINT\b/gi, 'INTEGER');
+    s = s.replace(/\bBIGINT\b/gi,   'INTEGER');
     s = s.replace(/\bSMALLINT\b/gi, 'INTEGER');
-    s = s.replace(/\bTINYINT\b/gi, 'INTEGER');
+    s = s.replace(/\bTINYINT\b/gi,  'INTEGER');
     s = s.replace(/\bMONEY\b|\bSMALLMONEY\b/gi, 'REAL');
     s = s.replace(/\bDECIMAL\s*\([^)]+\)/gi, 'REAL');
     s = s.replace(/\bNUMERIC\s*\([^)]+\)/gi, 'REAL');
-    s = s.replace(/\bFLOAT\b/gi, 'REAL');
-    s = s.replace(/\bBIT\b/gi, 'INTEGER');
-    s = s.replace(/\bDATETIME2?\b/gi, 'TEXT');
+    s = s.replace(/\bFLOAT\b/gi,     'REAL');
+    s = s.replace(/\bBIT\b/gi,       'INTEGER');
+    s = s.replace(/\bDATETIME2?\b/gi,'TEXT');
+    s = s.replace(/\bDATEOFFSET\b/gi,'TEXT');
+    s = s.replace(/\bSMALLDATETIME\b/gi,'TEXT');
+    s = s.replace(/\bUNIQUEIDENTIFIER\b/gi,'TEXT');
     s = s.replace(/\bIDENTITY\s*\(\s*\d+\s*,\s*\d+\s*\)/gi, '');
 
-    // NOLOCK hints and other table hints
-    s = s.replace(/\bWITH\s*\(\s*NOLOCK\s*\)/gi, '');
-    s = s.replace(/\bWITH\s*\(\s*(?:UPDLOCK|ROWLOCK|READPAST|XLOCK|TABLOCK)\s*\)/gi, '');
-
-    // Remove GO, USE, SET NOCOUNT etc.
-    s = s.replace(/^\s*GO\s*$/gim, '');
-    s = s.replace(/^\s*USE\s+[\w\[\]]+\s*;?\s*$/gim, '');
-    s = s.replace(/^\s*SET\s+NOCOUNT\s+ON\s*;?\s*$/gim, '');
-    s = s.replace(/^\s*SET\s+TRANSACTION\s+ISOLATION\s+LEVEL[^\n]+$/gim, '');
+    // ── Table / query hints ──
+    s = s.replace(/\bWITH\s*\(\s*(?:NOLOCK|UPDLOCK|ROWLOCK|READPAST|XLOCK|TABLOCK|READCOMMITTED|SERIALIZABLE)\s*\)/gi, '');
+    s = s.replace(/\bOPTION\s*\([^)]+\)/gi, ''); // OPTION(MAXDOP 1) etc.
   }
 
-  /* ════════════ MySQL ════════════ */
+  /* ════════════════════════════════════════
+     MySQL → SQLite
+  ════════════════════════════════════════ */
   if(dialect === 'mysql'){
-    // Backtick identifiers
+
+    // ── Backtick identifiers ──
     s = s.replace(/`(\w+)`/g, '$1');
 
-    // NULL / conditional functions
+    // ── DML shortcuts ──
+    s = s.replace(/\bINSERT\s+IGNORE\b/gi, 'INSERT OR IGNORE');
+    s = s.replace(/\bREPLACE\s+INTO\b/gi, 'INSERT OR REPLACE INTO');
+    s = s.replace(/\bON\s+DUPLICATE\s+KEY\s+UPDATE\b/gi, 'ON CONFLICT DO UPDATE SET');
+
+    // ── NULL / conditional ──
     s = s.replace(/\bIFNULL\s*\(/gi, 'COALESCE(');
+    s = s.replace(/\bNVL\s*\(/gi, 'COALESCE(');
+    // IF(cond, t, f) — careful not to hit existing IF keyword in SQL
     s = s.replace(/\bIF\s*\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, cond, t, f) => `CASE WHEN ${cond.trim()} THEN ${t.trim()} ELSE ${f.trim()} END`);
-    s = s.replace(/\bIFNULL\s*\(/gi, 'COALESCE(');
 
-    // String functions
+    // ── String functions ──
     s = s.replace(/\bCHAR_LENGTH\s*\(/gi, 'LENGTH(');
-    s = s.replace(/\bLENGTH\s*\(/gi, 'LENGTH('); // same in SQLite
-    s = s.replace(/\bLOCATE\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+    s = s.replace(/\bLOCATE\s*\(\s*([^,]+?)\s*,\s*([^,)]+?)\s*(?:,\s*\d+\s*)?\)/gi,
                   (_, sub, str) => `INSTR(${str.trim()},${sub.trim()})`);
-    s = s.replace(/\bINSTR\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, str, sub) => `INSTR(${str.trim()},${sub.trim()})`); // MySQL INSTR = same order
     s = s.replace(/\bLEFT\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, str, n) => `SUBSTR(${str.trim()},1,${n.trim()})`);
     s = s.replace(/\bRIGHT\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, str, n) => `SUBSTR(${str.trim()},-CAST(${n.trim()} AS INTEGER))`);
     s = s.replace(/\bMID\s*\(/gi, 'SUBSTR(');
     s = s.replace(/\bSUBSTRING\s*\(/gi, 'SUBSTR(');
+    // LPAD(str, len, pad) — use printf trick
+    s = s.replace(/\bLPAD\s*\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, str, len, pad) =>
+                  `SUBSTR(REPLACE(PRINTF('%'||CAST(${len.trim()} AS INTEGER)||'c','x'),PRINTF('%c','x'),${pad.trim()}) || CAST(${str.trim()} AS TEXT), -(${len.trim()}))`);
+    // RPAD(str, len, pad)
+    s = s.replace(/\bRPAD\s*\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, str, len, pad) =>
+                  `SUBSTR(CAST(${str.trim()} AS TEXT) || REPLACE(PRINTF('%'||CAST(${len.trim()} AS INTEGER)||'c','x'),PRINTF('%c','x'),${pad.trim()}), 1, ${len.trim()})`);
+    // REPEAT(str, n)
+    s = s.replace(/\bREPEAT\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, str, n) => `REPLACE(PRINTF('%.'||CAST((${n.trim()}) AS INTEGER)||'c','x'),PRINTF('%c','x'),${str.trim()})`);
+    // GROUP_CONCAT(col SEPARATOR 'x') → GROUP_CONCAT(col,'x')
+    s = s.replace(/\bGROUP_CONCAT\s*\(\s*((?:DISTINCT\s+)?[^)]+?)\s+SEPARATOR\s+('[^']*')\s*\)/gi,
+                  (_, col, sep) => `GROUP_CONCAT(${col.trim()},${sep})`);
+    // GROUP_CONCAT(col ORDER BY ...) — strip ORDER BY clause (SQLite doesn't support it inside)
+    s = s.replace(/\bGROUP_CONCAT\s*\(\s*((?:DISTINCT\s+)?[^)]+?)\s+ORDER\s+BY\s+[^)]+?\s*(?:SEPARATOR\s+'[^']*')?\s*\)/gi,
+                  (_, col) => `GROUP_CONCAT(${col.trim()})`);
     s = translateCONCAT(s);
     s = s.replace(/\bCONCAT_WS\s*\(\s*([^,]+?)\s*,\s*([^)]+)\)/gi,
                   (_, sep, rest) => rest.split(',').map(a=>a.trim()).join(` || ${sep.trim()} || `));
-    s = s.replace(/\bGROUP_CONCAT\s*\(/gi, 'GROUP_CONCAT('); // same in SQLite
     s = s.replace(/\bCEILING\s*\(/gi, 'CEIL(');
     s = s.replace(/\bMOD\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, a, b) => `(${a.trim()} % ${b.trim()})`);
-    s = s.replace(/\bPOW\s*\(/gi, 'POW('); // SQLite doesn't have POW, use power() or manual
+    // TRUNCATE(x, d) → ROUND with floor-style
+    s = s.replace(/\bTRUNCATE\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, x, d) => `ROUND(${x.trim()}-(0.5/POWER(10,${d.trim()})),${d.trim()})`);
+    // POW(x,y) → POWER if available else manual
+    s = s.replace(/\bPOW\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, x, y) => `(CAST(${x.trim()} AS REAL)*CAST(${x.trim()} AS REAL))`);
+    // FIELD(val, v1, v2, ...) → CASE WHEN
+    s = s.replace(/\bFIELD\s*\(([^)]+)\)/gi, (_, args) => {
+      const parts = args.split(',').map(a => a.trim());
+      const val = parts[0], opts = parts.slice(1);
+      return `CASE ${val} ${opts.map((v,i)=>`WHEN ${v} THEN ${i+1}`).join(' ')} ELSE 0 END`;
+    });
+    // FORMAT(num, decimals) — MySQL numeric format (not date format)
+    s = s.replace(/\bFORMAT\s*\(\s*([^,]+?)\s*,\s*(\d+)\s*\)/gi,
+                  (_, n, d) => `ROUND(CAST(${n.trim()} AS REAL),${d})`);
+    // STR_TO_DATE(str, fmt) — just return the string directly (best approximation)
+    s = s.replace(/\bSTR_TO_DATE\s*\(\s*([^,]+?)\s*,\s*'[^']+'\s*\)/gi,
+                  (_, v) => `DATE(${v.trim()})`);
+    // CAST(x AS SIGNED/UNSIGNED/DECIMAL) — MySQL-specific types
+    s = s.replace(/\bCAST\s*\(\s*([^)]+?)\s+AS\s+(?:SIGNED|UNSIGNED)\s*\)/gi,
+                  (_, v) => `CAST(${v.trim()} AS INTEGER)`);
+    s = s.replace(/\bCAST\s*\(\s*([^)]+?)\s+AS\s+(?:DECIMAL|NUMERIC)(?:\s*\([^)]*\))?\s*\)/gi,
+                  (_, v) => `CAST(${v.trim()} AS REAL)`);
+    s = s.replace(/\bCAST\s*\(\s*([^)]+?)\s+AS\s+(?:DATETIME|DATE)\s*\)/gi,
+                  (_, v) => `DATE(${v.trim()})`);
 
-    // Date / time functions
+    // ── Date / time functions ──
     s = s.replace(/\bNOW\s*\(\s*\)/gi, "DATETIME('now')");
     s = s.replace(/\bCURDATE\s*\(\s*\)/gi, "DATE('now')");
-    s = s.replace(/\bCURRENT_DATE\s*\(\s*\)/gi, "DATE('now')");
+    s = s.replace(/\bCURRENT_DATE(?:\s*\(\s*\))?/gi, "DATE('now')");
     s = s.replace(/\bCURTIME\s*\(\s*\)/gi, "TIME('now')");
     s = s.replace(/\bSYSDATE\s*\(\s*\)/gi, "DATETIME('now')");
 
-    s = s.replace(/\bYEAR\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%Y',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bMONTH\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%m',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bDAY\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%d',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bDAYOFWEEK\s*\(([^)]+)\)/gi,
-                  (_, a) => `(CAST(strftime('%w',${a.trim()}) AS INTEGER)+1)`);
-    s = s.replace(/\bDAYOFYEAR\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%j',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bWEEK\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%W',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bWEEKOFYEAR\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%W',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bQUARTER\s*\(([^)]+)\)/gi,
-                  (_, a) => `((CAST(strftime('%m',${a.trim()}) AS INTEGER)-1)/3+1)`);
-    s = s.replace(/\bHOUR\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%H',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bMINUTE\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%M',${a.trim()}) AS INTEGER)`);
-    s = s.replace(/\bSECOND\s*\(([^)]+)\)/gi,
-                  (_, a) => `CAST(strftime('%S',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bYEAR\s*\(([^)]+)\)/gi,      (_, a) => `CAST(strftime('%Y',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bMONTH\s*\(([^)]+)\)/gi,     (_, a) => `CAST(strftime('%m',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bDAY\s*\(([^)]+)\)/gi,        (_, a) => `CAST(strftime('%d',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bDAYOFWEEK\s*\(([^)]+)\)/gi, (_, a) => `(CAST(strftime('%w',${a.trim()}) AS INTEGER)+1)`);
+    s = s.replace(/\bDAYOFYEAR\s*\(([^)]+)\)/gi, (_, a) => `CAST(strftime('%j',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bWEEK\s*\(([^)]+)\)/gi,       (_, a) => `CAST(strftime('%W',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bWEEKOFYEAR\s*\(([^)]+)\)/gi,(_, a) => `CAST(strftime('%W',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bQUARTER\s*\(([^)]+)\)/gi,   (_, a) => `((CAST(strftime('%m',${a.trim()}) AS INTEGER)-1)/3+1)`);
+    s = s.replace(/\bHOUR\s*\(([^)]+)\)/gi,       (_, a) => `CAST(strftime('%H',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bMINUTE\s*\(([^)]+)\)/gi,     (_, a) => `CAST(strftime('%M',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bSECOND\s*\(([^)]+)\)/gi,     (_, a) => `CAST(strftime('%S',${a.trim()}) AS INTEGER)`);
+    s = s.replace(/\bLAST_DAY\s*\(([^)]+)\)/gi,   (_, a) => `DATE(${a.trim()},'+1 month','start of month','-1 day')`);
+    s = s.replace(/\bDATE\s*\(([^)]+)\)/gi,        (_, a) => `DATE(${a.trim()})`);
 
-    // DATE_FORMAT(date, fmt)
+    // DATE_FORMAT(date, fmt) — keep MySQL % codes as-is (same as strftime)
     s = s.replace(/\bDATE_FORMAT\s*\(\s*([^,]+?)\s*,\s*'([^']+)'\s*\)/gi,
                   (_, col, fmt) => `strftime('${fmt}',${col.trim()})`);
 
-    // DATEDIFF(d1, d2) — MySQL: d1 - d2
+    // DATEDIFF(d1, d2) — MySQL: d1 - d2 (opposite of MSSQL)
     s = s.replace(/\bDATEDIFF\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, d1, d2) => `CAST(julianday(${d1.trim()})-julianday(${d2.trim()}) AS INTEGER)`);
 
     // TIMESTAMPDIFF(unit, d1, d2)
+    s = s.replace(/\bTIMESTAMPDIFF\s*\(\s*(?:SECOND|S)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))*86400 AS INTEGER)`);
+    s = s.replace(/\bTIMESTAMPDIFF\s*\(\s*(?:MINUTE)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))*1440 AS INTEGER)`);
+    s = s.replace(/\bTIMESTAMPDIFF\s*\(\s*(?:HOUR)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))*24 AS INTEGER)`);
     s = s.replace(/\bTIMESTAMPDIFF\s*\(\s*(?:DAY)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
                   (_, d1, d2) => `CAST(julianday(${d2.trim()})-julianday(${d1.trim()}) AS INTEGER)`);
+    s = s.replace(/\bTIMESTAMPDIFF\s*\(\s*(?:WEEK)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/7 AS INTEGER)`);
     s = s.replace(/\bTIMESTAMPDIFF\s*\(\s*(?:MONTH)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/30 AS INTEGER)`);
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/30.44 AS INTEGER)`);
     s = s.replace(/\bTIMESTAMPDIFF\s*\(\s*(?:YEAR)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
-                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/365 AS INTEGER)`);
+                  (_, d1, d2) => `CAST((julianday(${d2.trim()})-julianday(${d1.trim()}))/365.25 AS INTEGER)`);
 
-    // DATE_ADD / DATE_SUB with INTERVAL
-    s = s.replace(/\bDATE_ADD\s*\(\s*([^,]+?)\s*,\s*INTERVAL\s+([^)]+?)\s+(DAY|MONTH|YEAR|HOUR|MINUTE|SECOND)\s*\)/gi,
+    // DATE_ADD / DATE_SUB INTERVAL
+    s = s.replace(/\bDATE_ADD\s*\(\s*([^,]+?)\s*,\s*INTERVAL\s+(-?\d+(?:\.\d+)?)\s+(YEAR|MONTH|WEEK|DAY|HOUR|MINUTE|SECOND)\s*\)/gi,
+                  (_, d, n, u) => `DATE(${d.trim()},'+${n} ${u.toLowerCase()}${Math.abs(Number(n))!==1?'s':''}')`);
+    s = s.replace(/\bDATE_SUB\s*\(\s*([^,]+?)\s*,\s*INTERVAL\s+(-?\d+(?:\.\d+)?)\s+(YEAR|MONTH|WEEK|DAY|HOUR|MINUTE|SECOND)\s*\)/gi,
+                  (_, d, n, u) => `DATE(${d.trim()},'-${n} ${u.toLowerCase()}${Math.abs(Number(n))!==1?'s':''}')`);
+    // DATE_ADD / DATE_SUB with expressions
+    s = s.replace(/\bDATE_ADD\s*\(\s*([^,]+?)\s*,\s*INTERVAL\s+([^)]+?)\s+(YEAR|MONTH|WEEK|DAY|HOUR|MINUTE|SECOND)\s*\)/gi,
                   (_, d, n, u) => `DATETIME(${d.trim()},'+' || (${n.trim()}) || ' ${u.toLowerCase()}s')`);
-    s = s.replace(/\bDATE_SUB\s*\(\s*([^,]+?)\s*,\s*INTERVAL\s+([^)]+?)\s+(DAY|MONTH|YEAR|HOUR|MINUTE|SECOND)\s*\)/gi,
+    s = s.replace(/\bDATE_SUB\s*\(\s*([^,]+?)\s*,\s*INTERVAL\s+([^)]+?)\s+(YEAR|MONTH|WEEK|DAY|HOUR|MINUTE|SECOND)\s*\)/gi,
                   (_, d, n, u) => `DATETIME(${d.trim()},'-' || (${n.trim()}) || ' ${u.toLowerCase()}s')`);
-    s = s.replace(/\bADDDATE\s*\(\s*([^,]+?)\s*,\s*INTERVAL\s+([^)]+?)\s+(DAY|MONTH|YEAR)\s*\)/gi,
-                  (_, d, n, u) => `DATE(${d.trim()},'+' || (${n.trim()}) || ' ${u.toLowerCase()}s')`);
 
-    // MySQL LIMIT offset, count syntax → LIMIT count OFFSET offset
+    // MySQL LIMIT offset, count → LIMIT count OFFSET offset
     s = s.replace(/\bLIMIT\s+(\d+)\s*,\s*(\d+)\b/gi,
                   (_, off, lim) => `LIMIT ${lim} OFFSET ${off}`);
 
-    // Data types
-    s = s.replace(/\bTINYINT\b(?:\s*\(\s*\d+\s*\))?/gi, 'INTEGER');
-    s = s.replace(/\bBIGINT\b(?:\s*\(\s*\d+\s*\))?/gi, 'INTEGER');
+    // ── Data types ──
+    s = s.replace(/\bTINYINT\b(?:\s*\(\s*\d+\s*\))?/gi,   'INTEGER');
+    s = s.replace(/\bBIGINT\b(?:\s*\(\s*\d+\s*\))?/gi,    'INTEGER');
     s = s.replace(/\bMEDIUMINT\b(?:\s*\(\s*\d+\s*\))?/gi, 'INTEGER');
-    s = s.replace(/\bSMALLINT\b(?:\s*\(\s*\d+\s*\))?/gi, 'INTEGER');
-    s = s.replace(/\bINT\b(?:\s*\(\s*\d+\s*\))?/gi, 'INTEGER');
-    s = s.replace(/\bDOUBLE\b(?:\s+PRECISION)?/gi, 'REAL');
-    s = s.replace(/\bFLOAT\b(?:\s*\([^)]*\))?/gi, 'REAL');
-    s = s.replace(/\bDECIMAL\s*\([^)]+\)/gi, 'REAL');
-    s = s.replace(/\bNUMERIC\s*\([^)]+\)/gi, 'REAL');
-    s = s.replace(/\bVARCHAR\s*\([^)]+\)/gi, 'TEXT');
-    s = s.replace(/\bCHAR\s*\([^)]+\)/gi, 'TEXT');
+    s = s.replace(/\bSMALLINT\b(?:\s*\(\s*\d+\s*\))?/gi,  'INTEGER');
+    s = s.replace(/\bINT\b(?:\s*\(\s*\d+\s*\))?/gi,       'INTEGER');
+    s = s.replace(/\bDOUBLE\b(?:\s+PRECISION)?/gi,         'REAL');
+    s = s.replace(/\bFLOAT\b(?:\s*\([^)]*\))?/gi,         'REAL');
+    s = s.replace(/\bDECIMAL\s*\([^)]+\)/gi,              'REAL');
+    s = s.replace(/\bNUMERIC\s*\([^)]+\)/gi,              'REAL');
+    s = s.replace(/\bVARCHAR\s*\([^)]+\)/gi,              'TEXT');
+    s = s.replace(/\bCHAR\s*\([^)]+\)/gi,                 'TEXT');
     s = s.replace(/\bTINYTEXT\b|\bMEDIUMTEXT\b|\bLONGTEXT\b/gi, 'TEXT');
-    s = s.replace(/\bBOOLEAN\b|\bBOOL\b/gi, 'INTEGER');
-    s = s.replace(/\bDATETIME\b/gi, 'TEXT');
-    s = s.replace(/\bTIMESTAMP\b/gi, 'TEXT');
+    s = s.replace(/\bBOOLEAN\b|\bBOOL\b/gi,               'INTEGER');
+    s = s.replace(/\bDATETIME\b/gi,                        'TEXT');
+    s = s.replace(/\bTIMESTAMP\b/gi,                       'TEXT');
+    s = s.replace(/\bYEAR\s*\(\s*4\s*\)/gi,               'INTEGER');
+    s = s.replace(/\bENUM\s*\([^)]+\)/gi,                  'TEXT');
+    s = s.replace(/\bSET\s*\([^)]+\)/gi,                   'TEXT');
+    s = s.replace(/\bJSON\b/gi,                            'TEXT');
+    s = s.replace(/\bBLOB\b|\bTINYBLOB\b|\bMEDIUMBLOB\b|\bLONGBLOB\b/gi, 'BLOB');
 
-    // MySQL-specific DDL
+    // ── MySQL DDL cleanup ──
     s = s.replace(/\bAUTO_INCREMENT\b/gi, '');
     s = s.replace(/\bENGINE\s*=\s*\w+/gi, '');
     s = s.replace(/\bDEFAULT\s+CHARSET\s*=\s*\w+/gi, '');
@@ -1757,10 +1933,11 @@ function translateSQL(sql, dialect){
     s = s.replace(/\bCOLLATE\s+[\w_]+/gi, '');
     s = s.replace(/\bUNSIGNED\b/gi, '');
     s = s.replace(/\bZEROFILL\b/gi, '');
+    s = s.replace(/\bROW_FORMAT\s*=\s*\w+/gi, '');
   }
 
-  const changed = s.trim() !== sql.trim();
-  return { sql: s.trim(), changed, original: sql };
+  const changed = s.trim() !== rawSql.trim();
+  return { sql: s.trim(), changed, warnings, original: rawSql };
 }
 
 
@@ -1802,21 +1979,22 @@ function doRun(){
   if(!state.curQ){showToast('⚠ Select a question first');return;}
   const {sql:rawSQL, isSelection}=getSQLToRun();
   if(!rawSQL){showToast('✏ Write some SQL first');return;}
-  const {sql, changed}=translateSQL(rawSQL, currentDialect);
+  const {sql, changed, warnings}=translateSQL(rawSQL, currentDialect);
   const tableErr=validateTables(sql);
   const container=document.getElementById('r-output');
   if(tableErr){
     container.innerHTML=`<div class="om"><span class="ob fail">✗ Restricted</span></div><div class="obox fail"><strong>⛔ Table Access Restricted:</strong><br/>${tableErr}</div>`;
     return;
   }
-  const result=execSQL(sql);
   const dialectBadge = changed ? `<span class="xlat-badge ${currentDialect}">⚡ ${currentDialect.toUpperCase()} translated</span>` : '';
   const selBadge = isSelection ? `<span style="color:var(--pur);font-size:10px;margin-left:4px;">▶ Selection only</span>` : '';
+  const warnHtml = warnings.length ? `<div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.25);border-radius:5px;padding:6px 9px;margin-bottom:6px;font-size:10px;color:var(--yel);line-height:1.7;">${warnings.join('<br/>')}</div>` : '';
+  const result=execSQL(sql);
   if(result.error){
-    container.innerHTML=`<div class="om"><span class="ob fail">✗ Error</span>${dialectBadge}${selBadge}</div><div class="obox fail"><strong>SQL Error:</strong><br/>${esc(result.error)}<br/><br/><span style="color:var(--tx3);font-size:10px;">Check syntax and table/column names above.</span>${changed?`<br/><details style="margin-top:6px;"><summary style="cursor:pointer;font-size:10px;color:var(--tx3);">Translated SQL (what ran)</summary><pre style="font-size:10px;color:var(--acc);margin-top:4px;white-space:pre-wrap;">${esc(sql)}</pre></details>`:''}
+    container.innerHTML=`<div class="om"><span class="ob fail">✗ Error</span>${dialectBadge}${selBadge}</div>${warnHtml}<div class="obox fail"><strong>SQL Error:</strong><br/>${esc(result.error)}<br/><br/><span style="color:var(--tx3);font-size:10px;">Check syntax and table/column names above.</span>${changed?`<br/><details style="margin-top:6px;"><summary style="cursor:pointer;font-size:10px;color:var(--tx3);">Translated SQL (what ran)</summary><pre style="font-size:10px;color:var(--acc);margin-top:4px;white-space:pre-wrap;">${esc(sql)}</pre></details>`:''}
     </div>`;
   } else {
-    container.innerHTML=`<div class="om"><span class="ob info">▶ Executed</span><span>${result.elapsed}ms · ${result.rowCount} rows</span>${dialectBadge}${selBadge}</div>${makeTable(result)}${changed?`<details style="margin-top:6px;padding:0 2px;"><summary style="cursor:pointer;font-size:9px;color:var(--tx3);">▶ Translated SQL</summary><pre style="font-size:10px;color:var(--acc);margin-top:4px;white-space:pre-wrap;background:var(--bg);padding:6px;border-radius:4px;border:1px solid var(--bdr);">${esc(sql)}</pre></details>`:''}`;
+    container.innerHTML=`<div class="om"><span class="ob info">▶ Executed</span><span>${result.elapsed}ms · ${result.rowCount} rows</span>${dialectBadge}${selBadge}</div>${warnHtml}${makeTable(result)}${changed?`<details style="margin-top:6px;padding:0 2px;"><summary style="cursor:pointer;font-size:9px;color:var(--tx3);">▶ Translated SQL</summary><pre style="font-size:10px;color:var(--acc);margin-top:4px;white-space:pre-wrap;background:var(--bg);padding:6px;border-radius:4px;border:1px solid var(--bdr);">${esc(sql)}</pre></details>`:''}`;
   }
 }
 
@@ -1825,7 +2003,7 @@ function doSubmit(){
   if(!state.curQ){showToast('⚠ Select a question first');return;}
   const rawSQL=document.getElementById('editor').value.trim();
   if(!rawSQL){showToast('✏ Write some SQL first');return;}
-  const {sql, changed}=translateSQL(rawSQL, currentDialect);
+  const {sql, changed, warnings}=translateSQL(rawSQL, currentDialect);
   const tableErr=validateTables(sql);
   const container=document.getElementById('r-output');
   if(tableErr){
