@@ -4,7 +4,7 @@ Welcome to the **SQL Practice** repository! This project is designed to help use
 
 ## 🔗 Live Demo
 You can access the live version of this tool here:
-👉 **[Launch SQL Practice](https://sahaakash-me.github.io/SQLPractice.github.io/)**
+👉 **[Launch SQL Practice](https://crackthesql.netlify.app)**
 
 ---
 
