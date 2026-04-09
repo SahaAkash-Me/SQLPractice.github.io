@@ -720,6 +720,11 @@
       border-color: #a855f7;
     }
 
+    .dlct.pgsql.active {
+      background: #336791;
+      border-color: #336791;
+    }
+
     .xlat-badge {
       font-size: 9px;
       padding: 2px 7px;
@@ -740,6 +745,12 @@
       background: rgba(168, 85, 247, .12);
       border: 1px solid rgba(168, 85, 247, .3);
       color: var(--pur);
+    }
+
+    .xlat-badge.pgsql {
+      background: rgba(51, 103, 145, .15);
+      border: 1px solid rgba(51, 103, 145, .4);
+      color: #6baed6;
     }
 
     .ebtns {
@@ -1669,9 +1680,10 @@
             🖊 SQL Editor
             <div class="dialect-row">
               <span class="dialect-lbl">Mode:</span>
-              <button class="dlct sqlite active" id="dlct-sqlite" onclick="setDialect('sqlite',this)">SQLite</button>
+              <button class="dlct sqlite" id="dlct-sqlite" onclick="setDialect('sqlite',this)">SQLite</button>
               <button class="dlct mysql" id="dlct-mysql" onclick="setDialect('mysql',this)">MySQL</button>
               <button class="dlct mssql" id="dlct-mssql" onclick="setDialect('mssql',this)">MSSQL</button>
+              <button class="dlct pgsql active" id="dlct-pgsql" onclick="setDialect('pgsql',this)">PostgreSQL</button>
             </div>
             <span class="kbd">Ctrl+Enter=Run</span><span class="kbd">Select→Run selection</span><span
               class="kbd">Ctrl+⇧+Enter=Submit</span>
@@ -1685,7 +1697,7 @@
         </div>
         <div class="ewrap">
           <textarea id="editor" spellcheck="false"
-            placeholder="-- SQLite mode&#10;-- Ctrl+Enter = Run  |  Select text → Run selection  |  Ctrl+Shift+Enter = Submit&#10;-- Example: SELECT * FROM Customers;"></textarea>
+            placeholder="-- PostgreSQL mode — auto-translated to SQLite engine&#10;-- Ctrl+Enter = Run  |  Select text → Run selection  |  Ctrl+Shift+Enter = Submit&#10;-- Example: SELECT EXTRACT(YEAR FROM OrderDate), COUNT(*) FROM Orders GROUP BY 1;"></textarea>
           <div class="dbst">
             <div class="dbd load" id="dbd"></div><span id="dblbl">Loading…</span>
           </div>
@@ -3150,12 +3162,13 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
     // ═══════════════════════════════════════════════════════════
     // DIALECT ENGINE — MySQL / MSSQL → SQLite auto-translation
     // ═══════════════════════════════════════════════════════════
-    let currentDialect = 'sqlite';
+    let currentDialect = 'pgsql';
 
     const DIALECT_PLACEHOLDERS = {
       sqlite: `-- SQLite mode\n-- Ctrl+Enter = Run  |  Select text → Run selection  |  Ctrl+Shift+Enter = Submit\n-- Example: SELECT * FROM Customers;`,
       mysql: `-- MySQL mode — auto-translated to SQLite engine\n-- ✅ YEAR() MONTH() DAY() HOUR() MINUTE() QUARTER() WEEK() DAYOFWEEK()\n-- ✅ NOW() CURDATE() CURTIME() SYSDATE()\n-- ✅ DATE_FORMAT() DATEDIFF() TIMESTAMPDIFF() DATE_ADD/SUB INTERVAL\n-- ✅ IFNULL() IF() CONCAT() CONCAT_WS() GROUP_CONCAT(x SEPARATOR y)\n-- ✅ LEFT() RIGHT() MID() SUBSTRING() CHAR_LENGTH() LOCATE() LPAD() RPAD()\n-- ✅ CEILING() MOD() TRUNCATE() FIELD() CAST(x AS SIGNED/UNSIGNED)\n-- ✅ INSERT IGNORE  REPLACE INTO  ON DUPLICATE KEY UPDATE\n-- ✅ Backtick identifiers  LIMIT offset,count\n-- Example: SELECT YEAR(JoinDate), COUNT(*) FROM Customers GROUP BY 1;`,
-      mssql: `-- MSSQL (T-SQL) mode — auto-translated to SQLite engine\n-- ✅ SELECT TOP N  OFFSET n ROWS FETCH NEXT n ROWS ONLY\n-- ✅ ISNULL() IIF() TRY_CAST() TRY_CONVERT() CHOOSE()\n-- ✅ LEN() CHARINDEX() SUBSTRING() LEFT() RIGHT() STUFF() REPLICATE() SPACE()\n-- ✅ GETDATE() GETUTCDATE() SYSDATETIME() EOMONTH()\n-- ✅ YEAR() MONTH() DAY() DATEPART() DATEADD() DATEDIFF() FORMAT()\n-- ✅ CONVERT()  STRING_AGG()  CONCAT()\n-- ✅ [bracket] identifiers  dbo.schema prefix  GO/USE/SET NOCOUNT\n-- ✅ DECLARE @var / SET @var stripped  PRINT stripped\n-- ✅ + string concatenation → ||\n-- Example: SELECT TOP 5 * FROM Orders ORDER BY Sales DESC;`
+      mssql: `-- MSSQL (T-SQL) mode — auto-translated to SQLite engine\n-- ✅ SELECT TOP N  OFFSET n ROWS FETCH NEXT n ROWS ONLY\n-- ✅ ISNULL() IIF() TRY_CAST() TRY_CONVERT() CHOOSE()\n-- ✅ LEN() CHARINDEX() SUBSTRING() LEFT() RIGHT() STUFF() REPLICATE() SPACE()\n-- ✅ GETDATE() GETUTCDATE() SYSDATETIME() EOMONTH()\n-- ✅ YEAR() MONTH() DAY() DATEPART() DATEADD() DATEDIFF() FORMAT()\n-- ✅ CONVERT()  STRING_AGG()  CONCAT()\n-- ✅ [bracket] identifiers  dbo.schema prefix  GO/USE/SET NOCOUNT\n-- ✅ DECLARE @var / SET @var stripped  PRINT stripped\n-- ✅ + string concatenation → ||\n-- Example: SELECT TOP 5 * FROM Orders ORDER BY Sales DESC;`,
+      pgsql: `-- PostgreSQL mode — auto-translated to SQLite engine\n-- ✅ EXTRACT(YEAR/MONTH/DAY/DOW/WEEK FROM date)  DATE_TRUNC()  AGE()\n-- ✅ NOW() CURRENT_DATE CURRENT_TIMESTAMP  date + INTERVAL '1 day'\n-- ✅ NULLIF() COALESCE() GREATEST() LEAST()\n-- ✅ LEFT() RIGHT() SUBSTRING() POSITION() CHAR_LENGTH() INITCAP()\n-- ✅ STRING_AGG(col, sep)  ARRAY_AGG()  CONCAT()  format()\n-- ✅ ::type casting  (e.g. val::INTEGER  val::TEXT  val::DATE)\n-- ✅ GENERATE_SERIES stripped  RETURNING stripped  ON CONFLICT stripped\n-- ✅ ILIKE treated as LIKE  "double-quote" identifiers  schema.table prefix\n-- ✅ CEIL() FLOOR() ROUND() POWER() MOD()\n-- ✅ Window functions: ROW_NUMBER() RANK() DENSE_RANK() LAG() LEAD() OVER()\n-- Example: SELECT EXTRACT(YEAR FROM OrderDate), COUNT(*) FROM Orders GROUP BY 1;`
     };
 
     function setDialect(d, el) {
@@ -3258,10 +3271,6 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       if (dialect === 'sqlite') return { sql: rawSql, changed: false, warnings: [] };
       let s = rawSql;
       const warnings = [];
-
-      /* ════════════════════════════════════════
-         MSSQL / T-SQL → SQLite
-      ════════════════════════════════════════ */
       if (dialect === 'mssql') {
 
         // ── Strip T-SQL non-query statements ──
@@ -3629,6 +3638,199 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
         s = s.replace(/\bROW_FORMAT\s*=\s*\w+/gi, '');
       }
 
+      /* ════════════════════════════════════════
+         PostgreSQL → SQLite
+      ════════════════════════════════════════ */
+      if (dialect === 'pgsql') {
+
+        // ── "double-quote" identifiers → plain names ──
+        s = s.replace(/"(\w[\w\s]*)"/g, (_, n) => n.trim().replace(/\s+/g, '_'));
+
+        // ── schema.table prefix (public.Orders → Orders) ──
+        s = s.replace(/\b(\w+)\.(Orders|Customers|Products|Employees|OrdersArchive)\b/gi, '$2');
+
+        // ── Strip PG-specific statements ──
+        s = s.replace(/^\s*SET\s+search_path[^\n;]*(;|\n|$)/gim, '');
+        s = s.replace(/^\s*BEGIN(?:\s+TRANSACTION)?\s*;?\s*$/gim, '');
+        s = s.replace(/^\s*COMMIT\s*;?\s*$/gim, '');
+        s = s.replace(/^\s*ROLLBACK\s*;?\s*$/gim, '');
+
+        // ── Strip RETURNING clause ──
+        s = s.replace(/\bRETURNING\s+[^\n;]+/gi, '');
+
+        // ── ON CONFLICT → strip (not easily translatable in SELECT context) ──
+        s = s.replace(/\bON\s+CONFLICT\s+[^\n;]+/gi, '');
+
+        // ── GENERATE_SERIES → strip (warn) ──
+        if (/\bGENERATE_SERIES\b/i.test(s)) {
+          warnings.push('⚠️ <strong>GENERATE_SERIES</strong> is PostgreSQL-specific and not supported in SQLite. Simplify the query.');
+          s = s.replace(/\bGENERATE_SERIES\s*\([^)]+\)/gi, "(SELECT 1)");
+        }
+
+        // ── ::type casting — e.g. val::INTEGER, val::TEXT, val::DATE ──
+        s = s.replace(/\b([\w.()]+)\s*::\s*(?:BIGINT|SMALLINT|INT(?:EGER)?|NUMERIC(?:\s*\([^)]*\))?|DECIMAL(?:\s*\([^)]*\))?)\b/gi,
+          (_, v) => `CAST(${v} AS INTEGER)`);
+        s = s.replace(/\b([\w.()]+)\s*::\s*(?:FLOAT(?:8)?|DOUBLE\s+PRECISION|REAL|MONEY)\b/gi,
+          (_, v) => `CAST(${v} AS REAL)`);
+        s = s.replace(/\b([\w.()]+)\s*::\s*(?:VARCHAR(?:\s*\([^)]*\))?|CHAR(?:\s*\([^)]*\))?|TEXT|BPCHAR)\b/gi,
+          (_, v) => `CAST(${v} AS TEXT)`);
+        s = s.replace(/\b([\w.()]+)\s*::\s*(?:DATE|TIMESTAMP(?:\s+WITH\s+TIME\s+ZONE)?|TIMESTAMPTZ)\b/gi,
+          (_, v) => `DATE(${v})`);
+        s = s.replace(/\b([\w.()]+)\s*::\s*BOOLEAN\b/gi,
+          (_, v) => `CAST(${v} AS INTEGER)`);
+
+        // ── NULL / conditional ──
+        // NULLIF stays the same (both support it)
+        // COALESCE stays the same
+        // GREATEST / LEAST - approximate with CASE (SQLite lacks them)
+        s = s.replace(/\bGREATEST\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+          (_, a, b) => `CASE WHEN (${a.trim()}) >= (${b.trim()}) THEN (${a.trim()}) ELSE (${b.trim()}) END`);
+        s = s.replace(/\bLEAST\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+          (_, a, b) => `CASE WHEN (${a.trim()}) <= (${b.trim()}) THEN (${a.trim()}) ELSE (${b.trim()}) END`);
+
+        // ── String functions ──
+        s = s.replace(/\bCHAR_LENGTH\s*\(/gi, 'LENGTH(');
+        s = s.replace(/\bLENGTH\s*\(/gi, 'LENGTH('); // already same
+        s = s.replace(/\bINITCAP\s*\(/gi, 'UPPER(SUBSTR('); // approximate
+        s = s.replace(/\bLEFT\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+          (_, str, n) => `SUBSTR(${str.trim()},1,${n.trim()})`);
+        s = s.replace(/\bRIGHT\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+          (_, str, n) => `SUBSTR(${str.trim()},-CAST(${n.trim()} AS INTEGER))`);
+        s = s.replace(/\bSUBSTRING\s*\(\s*([^,]+?)\s+FROM\s+(\d+)(?:\s+FOR\s+(\d+))?\s*\)/gi,
+          (_, str, start, len) => len ? `SUBSTR(${str.trim()},${start},${len})` : `SUBSTR(${str.trim()},${start})`);
+        s = s.replace(/\bSUBSTRING\s*\(/gi, 'SUBSTR(');
+        s = s.replace(/\bPOSITION\s*\(\s*([^)]+?)\s+IN\s+([^)]+?)\s*\)/gi,
+          (_, sub, str) => `INSTR(${str.trim()},${sub.trim()})`);
+        s = s.replace(/\bSTRPOS\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+          (_, str, sub) => `INSTR(${str.trim()},${sub.trim()})`);
+        s = s.replace(/\bLPAD\s*\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+          (_, str, len, pad) =>
+            `SUBSTR(REPLACE(PRINTF('%'||CAST(${len.trim()} AS INTEGER)||'c','x'),PRINTF('%c','x'),${pad.trim()}) || CAST(${str.trim()} AS TEXT), -(${len.trim()}))`);
+        s = s.replace(/\bRPAD\s*\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+          (_, str, len, pad) =>
+            `SUBSTR(CAST(${str.trim()} AS TEXT) || REPLACE(PRINTF('%'||CAST(${len.trim()} AS INTEGER)||'c','x'),PRINTF('%c','x'),${pad.trim()}), 1, ${len.trim()})`);
+        s = s.replace(/\bREPEAT\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+          (_, str, n) => `REPLACE(PRINTF('%.'||CAST((${n.trim()}) AS INTEGER)||'c','x'),PRINTF('%c','x'),${str.trim()})`);
+        // STRING_AGG(col, sep) → GROUP_CONCAT(col, sep)
+        s = s.replace(/\bSTRING_AGG\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)(?:\s+WITHIN\s+GROUP\s*\([^)]*\))?/gi,
+          (_, col, sep) => `GROUP_CONCAT(${col.trim()},${sep.trim()})`);
+        // ARRAY_AGG → GROUP_CONCAT
+        s = s.replace(/\bARRAY_AGG\s*\(\s*([^)]+?)\s*\)/gi,
+          (_, col) => `GROUP_CONCAT(${col.trim()})`);
+        s = translateCONCAT(s);
+        // CONCAT_WS
+        s = s.replace(/\bCONCAT_WS\s*\(\s*([^,]+?)\s*,\s*([^)]+)\)/gi,
+          (_, sep, rest) => rest.split(',').map(a => a.trim()).join(` || ${sep.trim()} || `));
+        // || is already SQLite concatenation — no change needed
+        s = s.replace(/\bCEILING\s*\(/gi, 'CEIL(');
+        s = s.replace(/\bMOD\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+          (_, a, b) => `(${a.trim()} % ${b.trim()})`);
+        s = s.replace(/\bPOWER\s*\(/gi, 'POWER('); // SQLite 3.35+ has POWER, keep as-is
+        // format() — PG string format, approximate
+        s = s.replace(/\bformat\s*\(\s*'([^']+)'\s*,\s*([^)]+)\s*\)/gi,
+          (_, fmt, args) => `PRINTF('${fmt.replace(/%[sIL]/g,'%s')}',${args})`);
+        // ILIKE → LIKE (SQLite LIKE is case-insensitive for ASCII)
+        s = s.replace(/\bILIKE\b/gi, 'LIKE');
+        // NOT ILIKE
+        s = s.replace(/\bNOT\s+ILIKE\b/gi, 'NOT LIKE');
+
+        // ── Date / time functions ──
+        s = s.replace(/\bNOW\s*\(\s*\)/gi, "DATETIME('now')");
+        s = s.replace(/\bCURRENT_TIMESTAMP\b/gi, "DATETIME('now')");
+        s = s.replace(/\bCURRENT_DATE\b/gi, "DATE('now')");
+        s = s.replace(/\bCURRENT_TIME\b/gi, "TIME('now')");
+        s = s.replace(/\bLOCALTIMESTAMP\b/gi, "DATETIME('now')");
+        s = s.replace(/\bLOCALTIME\b/gi, "TIME('now')");
+
+        // EXTRACT(field FROM date) → strftime equivalents
+        s = s.replace(/\bEXTRACT\s*\(\s*EPOCH\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `CAST((julianday(${d.trim()})-2440587.5)*86400 AS INTEGER)`);
+        s = s.replace(/\bEXTRACT\s*\(\s*YEAR\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `CAST(strftime('%Y',${d.trim()}) AS INTEGER)`);
+        s = s.replace(/\bEXTRACT\s*\(\s*MONTH\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `CAST(strftime('%m',${d.trim()}) AS INTEGER)`);
+        s = s.replace(/\bEXTRACT\s*\(\s*DAY\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `CAST(strftime('%d',${d.trim()}) AS INTEGER)`);
+        s = s.replace(/\bEXTRACT\s*\(\s*(?:DOW|ISODOW)\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `CAST(strftime('%w',${d.trim()}) AS INTEGER)`);
+        s = s.replace(/\bEXTRACT\s*\(\s*DOY\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `CAST(strftime('%j',${d.trim()}) AS INTEGER)`);
+        s = s.replace(/\bEXTRACT\s*\(\s*WEEK\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `CAST(strftime('%W',${d.trim()}) AS INTEGER)`);
+        s = s.replace(/\bEXTRACT\s*\(\s*QUARTER\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `((CAST(strftime('%m',${d.trim()}) AS INTEGER)-1)/3+1)`);
+        s = s.replace(/\bEXTRACT\s*\(\s*HOUR\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `CAST(strftime('%H',${d.trim()}) AS INTEGER)`);
+        s = s.replace(/\bEXTRACT\s*\(\s*MINUTE\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `CAST(strftime('%M',${d.trim()}) AS INTEGER)`);
+        s = s.replace(/\bEXTRACT\s*\(\s*SECOND\s+FROM\s+([^)]+)\s*\)/gi,
+          (_, d) => `CAST(strftime('%S',${d.trim()}) AS INTEGER)`);
+
+        // DATE_TRUNC(field, date) → strftime-based truncation
+        s = s.replace(/\bDATE_TRUNC\s*\(\s*'year'\s*,\s*([^)]+?)\s*\)/gi,
+          (_, d) => `strftime('%Y-01-01',${d.trim()})`);
+        s = s.replace(/\bDATE_TRUNC\s*\(\s*'month'\s*,\s*([^)]+?)\s*\)/gi,
+          (_, d) => `strftime('%Y-%m-01',${d.trim()})`);
+        s = s.replace(/\bDATE_TRUNC\s*\(\s*'quarter'\s*,\s*([^)]+?)\s*\)/gi,
+          (_, d) => `DATE(${d.trim()},'start of month','-' || ((CAST(strftime('%m',${d.trim()}) AS INTEGER)-1)%3) || ' months')`);
+        s = s.replace(/\bDATE_TRUNC\s*\(\s*'week'\s*,\s*([^)]+?)\s*\)/gi,
+          (_, d) => `DATE(${d.trim()},'weekday 0','-7 days')`);
+        s = s.replace(/\bDATE_TRUNC\s*\(\s*'day'\s*,\s*([^)]+?)\s*\)/gi,
+          (_, d) => `DATE(${d.trim()})`);
+        s = s.replace(/\bDATE_TRUNC\s*\(\s*'hour'\s*,\s*([^)]+?)\s*\)/gi,
+          (_, d) => `strftime('%Y-%m-%d %H:00:00',${d.trim()})`);
+
+        // AGE(ts1, ts2) → approximate days
+        s = s.replace(/\bAGE\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)/gi,
+          (_, d1, d2) => `CAST(julianday(${d1.trim()})-julianday(${d2.trim()}) AS INTEGER) || ' days'`);
+        s = s.replace(/\bAGE\s*\(\s*([^)]+?)\s*\)/gi,
+          (_, d) => `CAST(julianday('now')-julianday(${d.trim()}) AS INTEGER) || ' days'`);
+
+        // Interval arithmetic: date + INTERVAL 'N unit' / date - INTERVAL 'N unit'
+        s = s.replace(/(['")\w]+)\s*\+\s*INTERVAL\s+'(-?\d+(?:\.\d+)?)\s+(year|month|week|day|hour|minute|second)s?'/gi,
+          (_, d, n, u) => `DATE(${d.trim()},'+${n} ${u}s')`);
+        s = s.replace(/(['")\w]+)\s*-\s*INTERVAL\s+'(-?\d+(?:\.\d+)?)\s+(year|month|week|day|hour|minute|second)s?'/gi,
+          (_, d, n, u) => `DATE(${d.trim()},'-${n} ${u}s')`);
+
+        // to_char(date, fmt) — approximate
+        s = s.replace(/\bTO_CHAR\s*\(\s*([^,]+?)\s*,\s*'([^']+)'\s*\)/gi, (_, col, fmt) => {
+          const f = fmt.replace(/YYYY/gi,'%Y').replace(/MM/gi,'%m').replace(/DD/gi,'%d')
+            .replace(/HH24/gi,'%H').replace(/HH/gi,'%H').replace(/MI/gi,'%M').replace(/SS/gi,'%S')
+            .replace(/MON/gi,'%b').replace(/MONTH/gi,'%B').replace(/DAY/gi,'%A');
+          return `strftime('${f}',${col.trim()})`;
+        });
+        s = s.replace(/\bTO_DATE\s*\(\s*([^,]+?)\s*,\s*'[^']+'\s*\)/gi,
+          (_, v) => `DATE(${v.trim()})`);
+        s = s.replace(/\bTO_TIMESTAMP\s*\(\s*([^,]+?)\s*,\s*'[^']+'\s*\)/gi,
+          (_, v) => `DATETIME(${v.trim()})`);
+
+        // ── Data types ──
+        s = s.replace(/\bBIGINT\b/gi, 'INTEGER');
+        s = s.replace(/\bSMALLINT\b/gi, 'INTEGER');
+        s = s.replace(/\bINT2\b|\bINT4\b|\bINT8\b/gi, 'INTEGER');
+        s = s.replace(/\bSERIAL\b|\bBIGSERIAL\b|\bSMALLSERIAL\b/gi, 'INTEGER');
+        s = s.replace(/\bDOUBLE\s+PRECISION\b/gi, 'REAL');
+        s = s.replace(/\bFLOAT(?:\d)?\b/gi, 'REAL');
+        s = s.replace(/\bDECIMAL\s*\([^)]+\)/gi, 'REAL');
+        s = s.replace(/\bNUMERIC\s*\([^)]+\)/gi, 'REAL');
+        s = s.replace(/\bNUMERIC\b/gi, 'REAL');
+        s = s.replace(/\bVARCHAR\s*\([^)]+\)/gi, 'TEXT');
+        s = s.replace(/\bCHAR\s*\([^)]+\)/gi, 'TEXT');
+        s = s.replace(/\bCHARACTER\s+VARYING(?:\s*\([^)]*\))?/gi, 'TEXT');
+        s = s.replace(/\bBOOLEAN\b|\bBOOL\b/gi, 'INTEGER');
+        s = s.replace(/\bTIMESTAMP(?:\s+WITH(?:OUT)?\s+TIME\s+ZONE)?\b/gi, 'TEXT');
+        s = s.replace(/\bTIMESTAMPTZ\b/gi, 'TEXT');
+        s = s.replace(/\bUUID\b/gi, 'TEXT');
+        s = s.replace(/\bJSONB?\b/gi, 'TEXT');
+        s = s.replace(/\bBYTEA\b/gi, 'BLOB');
+        s = s.replace(/\bINTERVAL\b/gi, 'TEXT');
+
+        // ── PG DDL cleanup ──
+        s = s.replace(/\bSERIAL\b/gi, '');
+        s = s.replace(/\bGENERATED\s+ALWAYS\s+AS\s+IDENTITY\b/gi, '');
+        s = s.replace(/\bPRIMARY\s+KEY\s+GENERATED\s+[^\n;]+/gi, 'PRIMARY KEY');
+      }
+
       const changed = s.trim() !== rawSql.trim();
       return { sql: s.trim(), changed, warnings, original: rawSql };
     }
@@ -3693,6 +3895,79 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       if (window.innerWidth <= 768) switchMob('rp');
     }
 
+    function showRefTab(btn, id) {
+      document.querySelectorAll('.ref-tab-btn').forEach(b => {
+        b.style.background = 'transparent';
+        b.style.color = b.textContent === 'SQLite' ? 'var(--acc)' : b.textContent === 'MySQL' ? 'var(--yel)' : b.textContent === 'MSSQL' ? 'var(--pur)' : '#6baed6';
+      });
+      btn.style.background = btn.textContent === 'SQLite' ? 'var(--acc)' : btn.textContent === 'MySQL' ? '#f59e0b' : btn.textContent === 'MSSQL' ? '#a855f7' : '#336791';
+      btn.style.color = '#fff';
+      ['ref-sqlite','ref-mysql','ref-mssql','ref-pgsql'].forEach(rid => {
+        const el = document.getElementById(rid);
+        if (el) el.style.display = rid === id ? 'block' : 'none';
+      });
+    }
+
+    // Translate SQLite reference answer to a target dialect (best-effort, display only)
+    function translateToDialect(sql, dialect) {
+      if (dialect === 'sqlite') return sql;
+      let s = sql;
+      if (dialect === 'mysql') {
+        s = s.replace(/\bstrftime\('%Y-%m',\s*([^)]+)\)/gi, (_, d) => `DATE_FORMAT(${d.trim()}, '%Y-%m')`);
+        s = s.replace(/\bstrftime\('%Y',\s*([^)]+)\)/gi, (_, d) => `YEAR(${d.trim()})`);
+        s = s.replace(/\bstrftime\('%m',\s*([^)]+)\)/gi, (_, d) => `MONTH(${d.trim()})`);
+        s = s.replace(/\bstrftime\('%d',\s*([^)]+)\)/gi, (_, d) => `DAY(${d.trim()})`);
+        s = s.replace(/julianday\('now'\)/gi, "NOW()");
+        s = s.replace(/julianday\(([^)]+)\)\s*-\s*julianday\(([^)]+)\)/gi, (_, d1, d2) => `DATEDIFF(${d1.trim()}, ${d2.trim()})`);
+        s = s.replace(/DATE\('now'\)/gi, 'CURDATE()');
+        s = s.replace(/DATETIME\('now'\)/gi, 'NOW()');
+        s = s.replace(/\bLENGTH\s*\(/gi, 'CHAR_LENGTH(');
+        s = s.replace(/\bSUBSTR\s*\(/gi, 'SUBSTRING(');
+        s = s.replace(/\bCOALESCE\s*\(/gi, 'IFNULL(');
+        s = s.replace(/\|\|/g, ", ' ', "); // rough concat
+        s = s.replace(/GROUP_CONCAT\s*\(/gi, 'GROUP_CONCAT(');
+      }
+      if (dialect === 'mssql') {
+        s = s.replace(/\bstrftime\('%Y-%m',\s*([^)]+)\)/gi, (_, d) => `FORMAT(${d.trim()}, 'yyyy-MM')`);
+        s = s.replace(/\bstrftime\('%Y',\s*([^)]+)\)/gi, (_, d) => `YEAR(${d.trim()})`);
+        s = s.replace(/\bstrftime\('%m',\s*([^)]+)\)/gi, (_, d) => `MONTH(${d.trim()})`);
+        s = s.replace(/\bstrftime\('%d',\s*([^)]+)\)/gi, (_, d) => `DAY(${d.trim()})`);
+        s = s.replace(/julianday\(([^)]+)\)\s*-\s*julianday\(([^)]+)\)/gi, (_, d1, d2) => `DATEDIFF(day, ${d2.trim()}, ${d1.trim()})`);
+        s = s.replace(/DATE\('now'\)/gi, 'GETDATE()');
+        s = s.replace(/DATETIME\('now'\)/gi, 'GETDATE()');
+        s = s.replace(/\bLENGTH\s*\(/gi, 'LEN(');
+        s = s.replace(/\bSUBSTR\s*\(/gi, 'SUBSTRING(');
+        s = s.replace(/\bGROUP_CONCAT\s*\(\s*([^,)]+?)\s*(?:,\s*([^)]+))?\s*\)/gi,
+          (_, col, sep) => `STRING_AGG(${col.trim()}, ${sep ? sep.trim() : "','"})`);
+        s = s.replace(/\bLIMIT\s+(\d+)(?:\s+OFFSET\s+(\d+))?/gi,
+          (_, lim, off) => off ? `OFFSET ${off} ROWS FETCH NEXT ${lim} ROWS ONLY` : '');
+        s = s.replace(/^\s*(SELECT)\b/i, 'SELECT TOP 100'); // approximate — add TOP
+        s = s.replace(/SELECT TOP 100\s+TOP 100/gi, 'SELECT TOP 100');
+      }
+      if (dialect === 'pgsql') {
+        s = s.replace(/\bstrftime\('%Y-%m',\s*([^)]+)\)/gi, (_, d) => `TO_CHAR(${d.trim()}, 'YYYY-MM')`);
+        s = s.replace(/\bstrftime\('%Y',\s*([^)]+)\)/gi, (_, d) => `EXTRACT(YEAR FROM ${d.trim()})`);
+        s = s.replace(/\bstrftime\('%m',\s*([^)]+)\)/gi, (_, d) => `EXTRACT(MONTH FROM ${d.trim()})`);
+        s = s.replace(/\bstrftime\('%d',\s*([^)]+)\)/gi, (_, d) => `EXTRACT(DAY FROM ${d.trim()})`);
+        s = s.replace(/CAST\(julianday\(([^)]+)\)\s*-\s*julianday\(([^)]+)\)\s+AS\s+INTEGER\)/gi,
+          (_, d1, d2) => `(${d1.trim()}::DATE - ${d2.trim()}::DATE)`);
+        s = s.replace(/julianday\(([^)]+)\)\s*-\s*julianday\(([^)]+)\)/gi,
+          (_, d1, d2) => `(${d1.trim()}::DATE - ${d2.trim()}::DATE)`);
+        s = s.replace(/DATE\('now'\)/gi, 'CURRENT_DATE');
+        s = s.replace(/DATETIME\('now'\)/gi, 'NOW()');
+        s = s.replace(/\bLENGTH\s*\(/gi, 'CHAR_LENGTH(');
+        s = s.replace(/\bSUBSTR\s*\(/gi, 'SUBSTRING(');
+        s = s.replace(/\bGROUP_CONCAT\s*\(\s*([^,)]+?)\s*(?:,\s*([^)]+))?\s*\)/gi,
+          (_, col, sep) => `STRING_AGG(${col.trim()}, ${sep ? sep.trim() : "','"})`);
+        s = s.replace(/\bCAST\s*\(([^)]+?)\s+AS\s+TEXT\)/gi, (_, v) => `${v.trim()}::TEXT`);
+        s = s.replace(/\bCAST\s*\(([^)]+?)\s+AS\s+INTEGER\)/gi, (_, v) => `${v.trim()}::INTEGER`);
+        s = s.replace(/\bCAST\s*\(([^)]+?)\s+AS\s+REAL\)/gi, (_, v) => `${v.trim()}::NUMERIC`);
+        s = s.replace(/\|\|/g, '||'); // already valid in PG
+        s = s.replace(/\bNULLIF\s*\(/gi, 'NULLIF(');
+      }
+      return s;
+    }
+
     function doSubmit() {
       if (!DB) { showToast('⚠ Database loading…', 'warn'); return; }
       if (!state.curQ) { showToast('⚠ Select a question first'); return; }
@@ -3713,13 +3988,31 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       if (check.passed) {
         if (!state.solved.has(q.id)) { state.solved.add(q.id); state.correctAttempts++; state.todaySolved++; }
         const noteHtml = check.note ? `<div style="font-size:10px;color:var(--yel);margin-bottom:4px;">ℹ ${check.note}</div>` : '';
+
+        // Generate reference answers for all 4 dialects
+        const sqliteAns = q.answer;
+        const mysqlAns = translateToDialect(q.answer, 'mysql');
+        const mssqlAns = translateToDialect(q.answer, 'mssql');
+        const pgsqlAns = translateToDialect(q.answer, 'pgsql');
+
         container.innerHTML = `
       <div class="om"><span class="ob ok">✓ Correct!</span>${dialectBadge}</div>
       ${noteHtml}
       ${check.userResult ? makeTable(check.userResult, true) : ''}
       <div class="exp-box"><strong>💡 Key Concept</strong>${q.exp}</div>
-      <div style="margin-top:7px;font-size:10px;color:var(--tx3);">Reference answer (SQLite):</div>
-      <pre class="ans-pre">${esc(q.answer)}</pre>
+      <div style="margin-top:8px;">
+        <div style="font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px;font-weight:600;">📖 Reference Answers — All Dialects</div>
+        <div style="display:flex;gap:4px;margin-bottom:4px;flex-wrap:wrap;">
+          <button onclick="showRefTab(this,'ref-sqlite')" class="ref-tab-btn active" style="font-size:9px;padding:2px 9px;border-radius:4px;background:var(--acc);border:1px solid var(--acc);color:#fff;cursor:pointer;font-family:var(--mono);">SQLite</button>
+          <button onclick="showRefTab(this,'ref-mysql')" class="ref-tab-btn" style="font-size:9px;padding:2px 9px;border-radius:4px;background:transparent;border:1px solid rgba(245,158,11,.4);color:var(--yel);cursor:pointer;font-family:var(--mono);">MySQL</button>
+          <button onclick="showRefTab(this,'ref-mssql')" class="ref-tab-btn" style="font-size:9px;padding:2px 9px;border-radius:4px;background:transparent;border:1px solid rgba(168,85,247,.4);color:var(--pur);cursor:pointer;font-family:var(--mono);">MSSQL</button>
+          <button onclick="showRefTab(this,'ref-pgsql')" class="ref-tab-btn" style="font-size:9px;padding:2px 9px;border-radius:4px;background:transparent;border:1px solid rgba(51,103,145,.5);color:#6baed6;cursor:pointer;font-family:var(--mono);">PostgreSQL</button>
+        </div>
+        <pre class="ans-pre" id="ref-sqlite">${esc(sqliteAns)}</pre>
+        <pre class="ans-pre" id="ref-mysql" style="display:none;color:#f59e0b;">${esc(mysqlAns)}</pre>
+        <pre class="ans-pre" id="ref-mssql" style="display:none;color:#a855f7;">${esc(mssqlAns)}</pre>
+        <pre class="ans-pre" id="ref-pgsql" style="display:none;color:#6baed6;">${esc(pgsqlAns)}</pre>
+      </div>
       ${changed ? `<div style="margin-top:5px;font-size:10px;color:var(--tx3);">Your ${currentDialect.toUpperCase()} (translated):</div><pre class="ans-pre" style="color:var(--pur);">${esc(sql)}</pre>` : ''}`;
         showToast('🎉 Correct!', 'ok');
         if (window.launchConfetti) launchConfetti();
@@ -4074,79 +4367,314 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       var extra = 0;
       var iv = setInterval(function () {
         spawnBurst(Math.random() * w, Math.random() * h * 0.7, 35, randomPalette());
-        if (++extra >= 10) clearInterval(iv);
+        if (++extra >= 8) clearInterval(iv);
       }, 200);
 
-      // ── ROCKET FIREWORKS ──
-      // Launch 5 rockets from bottom, explode at random heights
-      var rocketDelays = [0, 250, 500, 750, 1100];
-      rocketDelays.forEach(function(delay) {
+      // ── CHINESE FIREWORK ROCKETS ──
+      var cnDelays = [0, 250, 500, 750, 1050, 1350, 1700, 2100];
+      cnDelays.forEach(function(delay) {
         setTimeout(function() {
-          var rx = w * (0.15 + Math.random() * 0.7);
-          var ry = h * (0.15 + Math.random() * 0.35); // explode in upper portion
-          launchRocket(rx, ry, randomPalette());
+          var rx = w * (0.1 + Math.random() * 0.8);
+          var ry = h * (0.08 + Math.random() * 0.38);
+          launchChineseRocket(rx, ry);
         }, delay);
       });
 
       startLoop();
     };
 
-    // Rockets: trail rising from bottom then explode in a starburst
-    var rockets = [];
+    // ── roundRect polyfill for older browsers ──
+    if (!CanvasRenderingContext2D.prototype.roundRect) {
+      CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+        this.beginPath();
+        this.moveTo(x + r, y);
+        this.lineTo(x + w - r, y);
+        this.quadraticCurveTo(x + w, y, x + w, y + r);
+        this.lineTo(x + w, y + h - r);
+        this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        this.lineTo(x + r, y + h);
+        this.quadraticCurveTo(x, y + h, x, y + h - r);
+        this.lineTo(x, y + r);
+        this.quadraticCurveTo(x, y, x + r, y);
+        this.closePath();
+      };
+    }
 
-    function launchRocket(targetX, targetY, palette) {
-      var startY = canvas.height + 10;
+    // ═══════════════════════════════════════════════
+    // CHINESE FIREWORK ROCKET ENGINE
+    // Authentic: cylindrical body, fuse spark, rising
+    // trail, then chrysanthemum/peony/willow bursts
+    // in traditional festive colors
+    // ═══════════════════════════════════════════════
+    var rockets = [];
+    var cnStars = [];   // post-explosion star particles
+    var cnCrackles = []; // crackle sparks
+
+    // Traditional Chinese festive palette pools
+    var CN_PALETTES = [
+      // Crimson Gold — most traditional
+      ['#FF2200','#FF4400','#FF6600','#FFD700','#FFA500','#FF8C00'],
+      // Jade & Gold
+      ['#00C853','#00E676','#76FF03','#FFD700','#FFEA00','#C6FF00'],
+      // Imperial Purple & Gold
+      ['#AA00FF','#D500F9','#FF4081','#FFD700','#FF6D00','#FFAB40'],
+      // Peony Pink & Silver
+      ['#FF1744','#FF4081','#FF80AB','#FFFFFF','#FFD700','#FF6D00'],
+      // Sky Blue & Gold (cool burst)
+      ['#00B0FF','#40C4FF','#80D8FF','#FFD700','#FFFFFF','#69F0AE'],
+      // Pure Gold Chrysanthemum
+      ['#FFD700','#FFC107','#FF8F00','#FFCA28','#FFE082','#FF6F00'],
+    ];
+
+    function cnPalette() {
+      return CN_PALETTES[Math.floor(Math.random() * CN_PALETTES.length)];
+    }
+
+    // Burst types: chrysanthemum, peony, willow, ring, palm
+    var BURST_TYPES = ['chrysanthemum','peony','willow','ring','palm','crossette'];
+
+    function launchChineseRocket(targetX, targetY) {
+      var startY = canvas.height + 20;
+      var pal = cnPalette();
+      var burstType = BURST_TYPES[Math.floor(Math.random() * BURST_TYPES.length)];
+      var travelFrames = 38 + Math.floor(Math.random() * 18);
       var rocket = {
-        x: targetX, y: startY,
+        x: targetX + (Math.random()-0.5)*40,
+        y: startY,
         tx: targetX, ty: targetY,
-        speed: (startY - targetY) / 28,  // frames to reach target
-        frame: 0,
+        vx: (targetX - (targetX + (Math.random()-0.5)*40)) / travelFrames,
+        vy: (targetY - startY) / travelFrames,
+        frame: 0, totalFrames: travelFrames,
         trail: [],
+        fuseLife: 1.0,
         exploded: false,
-        palette: palette
+        done: false,
+        palette: pal,
+        burstType: burstType,
+        wobble: (Math.random()-0.5)*0.8
       };
       rockets.push(rocket);
+    }
+
+    // Spawn Chinese star particles after explosion
+    function spawnCnBurst(cx, cy, type, palette) {
+      var count, speedMin, speedMax, gravMult, tailLen, drift;
+      switch(type) {
+        case 'chrysanthemum': count=140; speedMin=5; speedMax=14; gravMult=0.06; tailLen=18; drift=0; break;
+        case 'peony':         count=110; speedMin=6; speedMax=16; gravMult=0.12; tailLen=10; drift=0.3; break;
+        case 'willow':        count=90;  speedMin=4; speedMax=10; gravMult=0.18; tailLen=22; drift=0.1; break;
+        case 'ring':          count=80;  speedMin=9; speedMax=11; gravMult=0.09; tailLen=12; drift=0; break;
+        case 'palm':          count=70;  speedMin=5; speedMax=13; gravMult=0.22; tailLen=8;  drift=0.5; break;
+        case 'crossette':     count=60;  speedMin=7; speedMax=12; gravMult=0.10; tailLen=14; drift=0.2; break;
+        default:              count=100; speedMin=5; speedMax=13; gravMult=0.10; tailLen=12; drift=0;
+      }
+
+      for (var i = 0; i < count; i++) {
+        var angle = type === 'ring'
+          ? (i / count) * Math.PI * 2          // perfect ring
+          : Math.random() * Math.PI * 2;        // random burst
+        var speed = speedMin + Math.random() * (speedMax - speedMin);
+        var col = palette[Math.floor(Math.random() * palette.length)];
+
+        cnStars.push({
+          x: cx, y: cy,
+          vx: Math.cos(angle) * speed + (Math.random()-0.5)*drift,
+          vy: Math.sin(angle) * speed + (Math.random()-0.5)*drift,
+          color: col,
+          life: 1.0,
+          decay: 0.006 + Math.random()*0.008,
+          grav: gravMult,
+          tail: [],
+          tailLen: tailLen,
+          r: 1.5 + Math.random()*1.5,
+          twinkle: Math.random() > 0.5
+        });
+
+        // Crossette: each star splits into 4 mini-stars at mid-life
+        if (type === 'crossette' && i % 4 === 0) {
+          cnStars[cnStars.length-1].crossette = true;
+          cnStars[cnStars.length-1].crossetteFired = false;
+        }
+      }
+
+      // Gold glitter core flash
+      for (var g = 0; g < 30; g++) {
+        var ga = Math.random() * Math.PI * 2;
+        cnStars.push({
+          x: cx, y: cy,
+          vx: Math.cos(ga)*(1+Math.random()*4),
+          vy: Math.sin(ga)*(1+Math.random()*4),
+          color: '#FFD700',
+          life: 1.0, decay: 0.04,
+          grav: 0.05, tail: [], tailLen: 5, r: 1, twinkle: false
+        });
+      }
+
+      // Crackle sparks — fast-fading tiny white/gold pops
+      for (var c = 0; c < 40; c++) {
+        var ca = Math.random() * Math.PI * 2;
+        var cs = 8 + Math.random()*12;
+        cnCrackles.push({
+          x: cx, y: cy,
+          vx: Math.cos(ca)*cs, vy: Math.sin(ca)*cs,
+          life: 1.0, decay: 0.07 + Math.random()*0.06,
+          color: Math.random()>0.5 ? '#FFFFFF' : '#FFD700'
+        });
+      }
+    }
+
+    function updateDrawCnParticles() {
+      // ── Stars ──
+      cnStars = cnStars.filter(function(s) { return s.life > 0.01; });
+      cnStars.forEach(function(s) {
+        s.vx *= 0.988;
+        s.vy += s.grav;
+        s.x += s.vx; s.y += s.vy;
+        s.tail.push({ x: s.x, y: s.y });
+        if (s.tail.length > s.tailLen) s.tail.shift();
+        s.life -= s.decay;
+
+        // Crossette split at half-life
+        if (s.crossette && !s.crossetteFired && s.life < 0.5) {
+          s.crossetteFired = true;
+          for (var k = 0; k < 4; k++) {
+            var ka = (k/4)*Math.PI*2;
+            cnStars.push({
+              x: s.x, y: s.y,
+              vx: Math.cos(ka)*5, vy: Math.sin(ka)*5,
+              color: '#FFD700', life: 0.6, decay: 0.025,
+              grav: 0.12, tail: [], tailLen: 8, r: 1, twinkle: false
+            });
+          }
+        }
+
+        // Draw tail
+        if (s.tail.length > 1) {
+          ctx.save();
+          for (var ti = 1; ti < s.tail.length; ti++) {
+            var alpha = (ti / s.tail.length) * s.life * 0.7;
+            ctx.strokeStyle = s.color;
+            ctx.globalAlpha = Math.max(0, alpha);
+            ctx.lineWidth = s.r * (ti / s.tail.length);
+            ctx.beginPath();
+            ctx.moveTo(s.tail[ti-1].x, s.tail[ti-1].y);
+            ctx.lineTo(s.tail[ti].x, s.tail[ti].y);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+
+        // Draw star head with twinkle
+        ctx.save();
+        var alpha = Math.max(0, s.life) * (s.twinkle ? (0.6 + 0.4*Math.sin(Date.now()*0.05)) : 1);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = s.color;
+        ctx.shadowBlur = 6; ctx.shadowColor = s.color;
+        ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill();
+        ctx.restore();
+      });
+
+      // ── Crackles ──
+      cnCrackles = cnCrackles.filter(function(c) { return c.life > 0.01; });
+      cnCrackles.forEach(function(c) {
+        c.vx *= 0.92; c.vy *= 0.92;
+        c.x += c.vx; c.y += c.vy;
+        c.life -= c.decay;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, c.life);
+        ctx.fillStyle = c.color;
+        ctx.shadowBlur = 4; ctx.shadowColor = c.color;
+        ctx.beginPath(); ctx.arc(c.x, c.y, 1.2, 0, Math.PI*2); ctx.fill();
+        ctx.restore();
+      });
     }
 
     function updateRockets() {
       rockets = rockets.filter(function(r) { return !r.done; });
       rockets.forEach(function(r) {
-        if (!r.exploded) {
-          r.frame++;
-          r.y -= r.speed;
-          r.trail.push({ x: r.x, y: r.y, life: 1.0 });
-          if (r.trail.length > 12) r.trail.shift();
-          r.trail.forEach(function(t) { t.life -= 0.09; });
+        if (r.exploded) return;
+        r.frame++;
+        r.x += r.vx + Math.sin(r.frame * 0.3) * r.wobble;
+        r.y += r.vy;
 
-          // Draw rocket body + trail
-          r.trail.forEach(function(t) {
-            ctx.save();
-            ctx.globalAlpha = Math.max(0, t.life * 0.7);
-            ctx.fillStyle = '#fff';
-            ctx.beginPath(); ctx.arc(t.x, t.y, 2.5, 0, Math.PI*2); ctx.fill();
-            ctx.restore();
-          });
-          // Rocket head glow
+        // Trail with color gradient (red→orange→yellow fuse effect)
+        r.trail.push({ x: r.x, y: r.y, life: 1.0 });
+        if (r.trail.length > 20) r.trail.shift();
+        r.trail.forEach(function(t) { t.life -= 0.055; });
+
+        // Draw rocket cylindrical body
+        ctx.save();
+        ctx.globalAlpha = 0.95;
+        // Body — red cylinder shape
+        var angle = Math.atan2(r.vy, r.vx);
+        ctx.translate(r.x, r.y);
+        ctx.rotate(angle + Math.PI/2);
+        // Red body
+        var grad = ctx.createLinearGradient(-3, -7, 3, 7);
+        grad.addColorStop(0, '#CC0000');
+        grad.addColorStop(0.4, '#FF2200');
+        grad.addColorStop(1, '#FF6600');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.roundRect(-3, -7, 6, 10, 2);
+        ctx.fill();
+        // Gold tip
+        ctx.fillStyle = '#FFD700';
+        ctx.beginPath();
+        ctx.moveTo(-3, -7); ctx.lineTo(0, -12); ctx.lineTo(3, -7);
+        ctx.closePath(); ctx.fill();
+        // Gold band
+        ctx.fillStyle = '#FFD700';
+        ctx.fillRect(-3, -2, 6, 2);
+        ctx.restore();
+
+        // Fuse spark glow
+        r.fuseLife = 0.7 + 0.3*Math.sin(r.frame*0.8);
+        ctx.save();
+        ctx.globalAlpha = r.fuseLife;
+        ctx.fillStyle = '#FFFF00';
+        ctx.shadowBlur = 10; ctx.shadowColor = '#FF8800';
+        ctx.beginPath(); ctx.arc(r.x, r.y + 8, 2.5, 0, Math.PI*2); ctx.fill();
+        ctx.restore();
+
+        // Rising trail — hot white core to orange fade
+        r.trail.forEach(function(t, idx) {
+          var frac = idx / r.trail.length;
+          var alpha = Math.max(0, t.life * frac * 0.9);
           ctx.save();
-          ctx.globalAlpha = 0.9;
-          ctx.fillStyle = '#fff';
-          ctx.shadowBlur = 8; ctx.shadowColor = '#fff';
-          ctx.beginPath(); ctx.arc(r.x, r.y, 3, 0, Math.PI*2); ctx.fill();
+          ctx.globalAlpha = alpha;
+          var tc = frac > 0.6 ? '#FFFFFF' : frac > 0.3 ? '#FF8800' : '#FF2200';
+          ctx.fillStyle = tc;
+          ctx.shadowBlur = 5; ctx.shadowColor = tc;
+          ctx.beginPath(); ctx.arc(t.x, t.y, (1 - frac)*3 + 0.5, 0, Math.PI*2); ctx.fill();
+          ctx.restore();
+        });
+
+        // Reached target — explode!
+        if (r.frame >= r.totalFrames) {
+          r.exploded = true;
+          r.done = true;
+
+          // Screen flash
+          ctx.save();
+          ctx.fillStyle = 'rgba(255,220,100,0.18)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
           ctx.restore();
 
-          if (r.y <= r.ty) {
-            r.exploded = true;
-            // Explode: big starburst of 120 pieces
-            spawnBurst(r.x, r.y, 120, r.palette);
-            // Extra ring burst with different palette
-            spawnBurst(r.x, r.y, 60, randomPalette());
-            r.done = true;
-          }
+          // Primary Chinese burst
+          spawnCnBurst(r.x, r.y, r.burstType, r.palette);
+
+          // Secondary smaller ring burst offset slightly
+          setTimeout(function() {
+            spawnCnBurst(r.x + (Math.random()-0.5)*30,
+                         r.y + (Math.random()-0.5)*30,
+                         'ring', cnPalette());
+          }, 120);
         }
       });
     }
 
-    // Override draw to also handle rockets
+    // Override draw to handle Chinese rockets + star particles
     var _origDraw = draw;
     draw = function() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -4168,7 +4696,8 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
         }
         ctx.restore();
       });
-      // Draw active rockets
+      // Draw Chinese star trails, crackles, then rockets
+      updateDrawCnParticles();
       updateRockets();
     };
 
@@ -4178,7 +4707,7 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       isRunning = true;
       (function loop() {
         update(); draw();
-        if (pieces.length > 0 || rockets.length > 0) {
+        if (pieces.length > 0 || rockets.length > 0 || cnStars.length > 0 || cnCrackles.length > 0) {
           animId = requestAnimationFrame(loop);
         } else {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -4199,30 +4728,111 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
     window.playSuccessSound = function () {
       try {
         var ac = getAC(), t = ac.currentTime;
-        // Rocket whoosh + fanfare
-        // Whoosh
-        var wLen = ac.sampleRate * 0.6;
-        var wBuf = ac.createBuffer(1, wLen, ac.sampleRate);
-        var wd = wBuf.getChannelData(0);
-        for (var i = 0; i < wLen; i++) wd[i] = (Math.random()*2-1) * (i/wLen);
-        var ws = ac.createBufferSource(); ws.buffer = wBuf;
-        var wf = ac.createBiquadFilter(); wf.type='bandpass'; wf.frequency.value=2000;
-        var wg = ac.createGain();
-        wg.gain.setValueAtTime(0.12, t);
-        wg.gain.exponentialRampToValueAtTime(0.001, t+0.55);
-        ws.connect(wf); wf.connect(wg); wg.connect(ac.destination);
-        ws.start(t); ws.stop(t+0.6);
 
-        // Ascending fanfare after whoosh
-        [[523,0.3],[659,0.42],[784,0.52],[1047,0.62],[1319,0.72],[1568,0.84]].forEach(function (fd) {
-          var o = ac.createOscillator(), g = ac.createGain();
-          o.connect(g); g.connect(ac.destination);
-          o.type = 'sine'; o.frequency.value = fd[0];
-          g.gain.setValueAtTime(0, t + fd[1]);
-          g.gain.linearRampToValueAtTime(0.22, t + fd[1] + 0.04);
-          g.gain.exponentialRampToValueAtTime(0.001, t + fd[1] + 0.42);
-          o.start(t + fd[1]); o.stop(t + fd[1] + 0.5);
+        // ── 8 rockets, synced to visual launch delays ──
+        var rocketTimes = [0, 0.25, 0.50, 0.75, 1.05, 1.35, 1.70, 2.10];
+
+        rocketTimes.forEach(function(rd) {
+          var rt = t + rd;
+
+          // LAYER 1: Rising whoosh — filtered noise sweeping up
+          var wLen = Math.floor(ac.sampleRate * 0.9);
+          var wBuf = ac.createBuffer(1, wLen, ac.sampleRate);
+          var wd = wBuf.getChannelData(0);
+          for (var i = 0; i < wLen; i++) {
+            var env = Math.pow(i / wLen, 0.4) * Math.pow(1 - i / wLen, 0.1);
+            wd[i] = (Math.random() * 2 - 1) * env;
+          }
+          var wSrc = ac.createBufferSource(); wSrc.buffer = wBuf;
+          var wBpf = ac.createBiquadFilter(); wBpf.type = 'bandpass';
+          wBpf.frequency.setValueAtTime(400, rt);
+          wBpf.frequency.exponentialRampToValueAtTime(3200, rt + 0.85);
+          wBpf.Q.value = 1.8;
+          var wGain = ac.createGain();
+          wGain.gain.setValueAtTime(0.0, rt);
+          wGain.gain.linearRampToValueAtTime(0.18, rt + 0.05);
+          wGain.gain.linearRampToValueAtTime(0.14, rt + 0.7);
+          wGain.gain.exponentialRampToValueAtTime(0.001, rt + 0.88);
+          wSrc.connect(wBpf); wBpf.connect(wGain); wGain.connect(ac.destination);
+          wSrc.start(rt); wSrc.stop(rt + 0.92);
+
+          // LAYER 2: Fuse sizzle — high-freq noise burst at launch
+          var fLen = Math.floor(ac.sampleRate * 0.12);
+          var fBuf = ac.createBuffer(1, fLen, ac.sampleRate);
+          var fd2 = fBuf.getChannelData(0);
+          for (var fi = 0; fi < fLen; fi++) fd2[fi] = (Math.random()*2-1) * (1 - fi/fLen);
+          var fSrc = ac.createBufferSource(); fSrc.buffer = fBuf;
+          var fHpf = ac.createBiquadFilter(); fHpf.type = 'highpass'; fHpf.frequency.value = 5000;
+          var fGain = ac.createGain();
+          fGain.gain.setValueAtTime(0.08, rt);
+          fGain.gain.exponentialRampToValueAtTime(0.001, rt + 0.1);
+          fSrc.connect(fHpf); fHpf.connect(fGain); fGain.connect(ac.destination);
+          fSrc.start(rt); fSrc.stop(rt + 0.13);
+
+          // LAYER 3: Explosion BOOM at end of whoosh
+          var bt = rt + 0.82;
+          // Sub boom
+          var bLen = Math.floor(ac.sampleRate * 1.4);
+          var bBuf = ac.createBuffer(1, bLen, ac.sampleRate);
+          var bd = bBuf.getChannelData(0);
+          for (var bi = 0; bi < bLen; bi++)
+            bd[bi] = (Math.random()*2-1) * Math.pow(Math.max(0, 1 - bi/bLen), 1.6);
+          var bSrc = ac.createBufferSource(); bSrc.buffer = bBuf;
+          var bLpf = ac.createBiquadFilter(); bLpf.type = 'lowpass';
+          bLpf.frequency.setValueAtTime(280, bt);
+          bLpf.frequency.exponentialRampToValueAtTime(40, bt + 0.9);
+          var bGain = ac.createGain();
+          bGain.gain.setValueAtTime(0, bt);
+          bGain.gain.linearRampToValueAtTime(1.6, bt + 0.008);
+          bGain.gain.exponentialRampToValueAtTime(0.001, bt + 1.2);
+          bSrc.connect(bLpf); bLpf.connect(bGain); bGain.connect(ac.destination);
+          bSrc.start(bt); bSrc.stop(bt + 1.4);
+
+          // Mid crack body
+          var cLen2 = Math.floor(ac.sampleRate * 0.6);
+          var cBuf2 = ac.createBuffer(1, cLen2, ac.sampleRate);
+          var cd2 = cBuf2.getChannelData(0);
+          for (var ci = 0; ci < cLen2; ci++)
+            cd2[ci] = (Math.random()*2-1) * Math.pow(Math.max(0,1-ci/cLen2), 1.1);
+          var cSrc2 = ac.createBufferSource(); cSrc2.buffer = cBuf2;
+          var cBpf2 = ac.createBiquadFilter(); cBpf2.type = 'bandpass';
+          cBpf2.frequency.value = 600; cBpf2.Q.value = 0.6;
+          var cGain2 = ac.createGain();
+          cGain2.gain.setValueAtTime(0.9, bt);
+          cGain2.gain.exponentialRampToValueAtTime(0.001, bt + 0.55);
+          cSrc2.connect(cBpf2); cBpf2.connect(cGain2); cGain2.connect(ac.destination);
+          cSrc2.start(bt); cSrc2.stop(bt + 0.65);
+
+          // LAYER 4: Chrysanthemum crackle — random high pops after boom
+          [0.02, 0.07, 0.14, 0.22, 0.32, 0.44, 0.58].forEach(function(pd) {
+            var pLen = Math.floor(ac.sampleRate * 0.08);
+            var pBuf = ac.createBuffer(1, pLen, ac.sampleRate);
+            var pData = pBuf.getChannelData(0);
+            for (var pi = 0; pi < pLen; pi++)
+              pData[pi] = (Math.random()*2-1) * Math.pow(1-pi/pLen, 1.8);
+            var pSrc = ac.createBufferSource(); pSrc.buffer = pBuf;
+            var pHpf = ac.createBiquadFilter(); pHpf.type = 'highpass';
+            pHpf.frequency.value = 2500 + Math.random()*3000;
+            var pGain = ac.createGain();
+            pGain.gain.setValueAtTime(0.28 + Math.random()*0.2, bt + pd);
+            pGain.gain.exponentialRampToValueAtTime(0.001, bt + pd + 0.07);
+            pSrc.connect(pHpf); pHpf.connect(pGain); pGain.connect(ac.destination);
+            pSrc.start(bt + pd); pSrc.stop(bt + pd + 0.09);
+          });
+
+          // LAYER 5: Sparkle shimmer — high sine twinkles (star particles sound)
+          [0.05, 0.18, 0.35, 0.55, 0.78].forEach(function(sd, si) {
+            var freq = [1800, 2200, 2600, 3100, 2400][si];
+            var so = ac.createOscillator(), sg = ac.createGain();
+            so.connect(sg); sg.connect(ac.destination);
+            so.type = 'sine'; so.frequency.value = freq;
+            sg.gain.setValueAtTime(0, bt + sd);
+            sg.gain.linearRampToValueAtTime(0.06, bt + sd + 0.02);
+            sg.gain.exponentialRampToValueAtTime(0.001, bt + sd + 0.18);
+            so.start(bt + sd); so.stop(bt + sd + 0.2);
+          });
         });
+
       } catch (e) {}
     };
 
