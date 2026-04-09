@@ -1152,6 +1152,13 @@
       letter-spacing: .8px;
     }
 
+    .ans-pre-wrap {
+      position: relative;
+      margin-top: 7px;
+    }
+    .ans-pre-wrap:hover .copy-hint { opacity: 1; }
+    .ans-pre-wrap.copied .copy-hint { opacity: 1; color: var(--grn); }
+    .ans-pre-wrap.copied .ans-pre { border-color: var(--grn) !important; }
     .ans-pre {
       background: var(--bg);
       padding: 8px 10px;
@@ -1161,9 +1168,12 @@
       line-height: 1.7;
       overflow-x: auto;
       white-space: pre;
-      margin-top: 7px;
       border: 1px solid var(--bdr);
+      cursor: copy;
+      transition: border-color .15s;
+      display: block;
     }
+    .ans-pre:hover { border-color: var(--acc); }
 
     .diff-box {
       background: rgba(239, 68, 68, .05);
@@ -1261,6 +1271,25 @@
       margin-top: 7px;
     }
 
+    .asql-wrap {
+      position: relative;
+      margin-top: 6px;
+    }
+    .asql-wrap:hover .copy-hint { opacity: 1; }
+    .asql-wrap.copied .copy-hint { opacity: 1; color: var(--grn); }
+    .asql-wrap.copied .asql { border-color: var(--grn) !important; }
+    .copy-hint {
+      position: absolute;
+      top: 5px;
+      right: 8px;
+      font-size: 9px;
+      color: var(--tx3);
+      opacity: 0;
+      transition: opacity .2s;
+      pointer-events: none;
+      font-family: var(--mono);
+      z-index: 2;
+    }
     .asql {
       background: var(--bg);
       padding: 8px;
@@ -1270,9 +1299,12 @@
       line-height: 1.65;
       overflow-x: auto;
       white-space: pre;
-      margin-top: 6px;
       border: 1px solid var(--bdr);
+      cursor: copy;
+      transition: border-color .15s;
+      display: block;
     }
+    .asql:hover { border-color: var(--acc); }
 
     /* PROGRESS */
     .pbar-w {
@@ -3886,10 +3918,10 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       const warnHtml = warnings.length ? `<div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.25);border-radius:5px;padding:6px 9px;margin-bottom:6px;font-size:10px;color:var(--yel);line-height:1.7;">${warnings.join('<br/>')}</div>` : '';
       const result = execSQL(sql);
       if (result.error) {
-        container.innerHTML = `<div class="om"><span class="ob fail">✗ Error</span>${dialectBadge}${selBadge}</div>${warnHtml}<div class="obox fail"><strong>SQL Error:</strong><br/>${esc(result.error)}<br/><br/><span style="color:var(--tx3);font-size:10px;">Check syntax and table/column names above.</span>${changed ? `<br/><details style="margin-top:6px;"><summary style="cursor:pointer;font-size:10px;color:var(--tx3);">Translated SQL (what ran)</summary><pre style="font-size:10px;color:var(--acc);margin-top:4px;white-space:pre-wrap;">${esc(sql)}</pre></details>` : ''}
+        container.innerHTML = `<div class="om"><span class="ob fail">✗ Error</span>${dialectBadge}${selBadge}</div>${warnHtml}<div class="obox fail"><strong>SQL Error:</strong><br/>${esc(result.error)}<br/><br/><span style="color:var(--tx3);font-size:10px;">Check syntax and table/column names above.</span>${changed ? `<br/><details style="margin-top:6px;"><summary style="cursor:pointer;font-size:10px;color:var(--tx3);">Translated SQL (what ran)</summary><div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" style="color:var(--acc);">${esc(sql)}</pre></div></details>` : ''}
     </div>`;
       } else {
-        container.innerHTML = `<div class="om"><span class="ob info">▶ Executed</span><span>${result.elapsed}ms · ${result.rowCount} rows</span>${dialectBadge}${selBadge}</div>${warnHtml}${makeTable(result)}${changed ? `<details style="margin-top:6px;padding:0 2px;"><summary style="cursor:pointer;font-size:9px;color:var(--tx3);">▶ Translated SQL</summary><pre style="font-size:10px;color:var(--acc);margin-top:4px;white-space:pre-wrap;background:var(--bg);padding:6px;border-radius:4px;border:1px solid var(--bdr);">${esc(sql)}</pre></details>` : ''}`;
+        container.innerHTML = `<div class="om"><span class="ob info">▶ Executed</span><span>${result.elapsed}ms · ${result.rowCount} rows</span>${dialectBadge}${selBadge}</div>${warnHtml}${makeTable(result)}${changed ? `<details style="margin-top:6px;padding:0 2px;"><summary style="cursor:pointer;font-size:9px;color:var(--tx3);">▶ Translated SQL</summary><div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" style="color:var(--acc);">${esc(sql)}</pre></div></details>` : ''}`;
       }
       // Auto-switch to Output pane on Mobile
       if (window.innerWidth <= 768) switchMob('rp');
@@ -3904,7 +3936,11 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       btn.style.color = '#fff';
       ['ref-sqlite','ref-mysql','ref-mssql','ref-pgsql'].forEach(rid => {
         const el = document.getElementById(rid);
-        if (el) el.style.display = rid === id ? 'block' : 'none';
+        if (el) {
+          const wrap = el.closest('.ans-pre-wrap') || el;
+          wrap.style.display = rid === id ? 'block' : 'none';
+          el.style.display = rid === id ? 'block' : 'none';
+        }
       });
     }
 
@@ -4008,12 +4044,12 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
           <button onclick="showRefTab(this,'ref-mssql')" class="ref-tab-btn" style="font-size:9px;padding:2px 9px;border-radius:4px;background:transparent;border:1px solid rgba(168,85,247,.4);color:var(--pur);cursor:pointer;font-family:var(--mono);">MSSQL</button>
           <button onclick="showRefTab(this,'ref-pgsql')" class="ref-tab-btn" style="font-size:9px;padding:2px 9px;border-radius:4px;background:transparent;border:1px solid rgba(51,103,145,.5);color:#6baed6;cursor:pointer;font-family:var(--mono);">PostgreSQL</button>
         </div>
-        <pre class="ans-pre" id="ref-sqlite">${esc(sqliteAns)}</pre>
-        <pre class="ans-pre" id="ref-mysql" style="display:none;color:#f59e0b;">${esc(mysqlAns)}</pre>
-        <pre class="ans-pre" id="ref-mssql" style="display:none;color:#a855f7;">${esc(mssqlAns)}</pre>
-        <pre class="ans-pre" id="ref-pgsql" style="display:none;color:#6baed6;">${esc(pgsqlAns)}</pre>
+        <div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" id="ref-sqlite">${esc(sqliteAns)}</pre></div>
+        <div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" id="ref-mysql" style="display:none;color:#f59e0b;">${esc(mysqlAns)}</pre></div>
+        <div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" id="ref-mssql" style="display:none;color:#a855f7;">${esc(mssqlAns)}</pre></div>
+        <div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" id="ref-pgsql" style="display:none;color:#6baed6;">${esc(pgsqlAns)}</pre></div>
       </div>
-      ${changed ? `<div style="margin-top:5px;font-size:10px;color:var(--tx3);">Your ${currentDialect.toUpperCase()} (translated):</div><pre class="ans-pre" style="color:var(--pur);">${esc(sql)}</pre>` : ''}`;
+      ${changed ? `<div style="margin-top:5px;font-size:10px;color:var(--tx3);">Your ${currentDialect.toUpperCase()} (translated):</div><div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" style="color:var(--pur);">${esc(sql)}</pre></div>` : ''}`;
         showToast('🎉 Correct!', 'ok');
         if (window.launchConfetti) launchConfetti();
         if (window.playSuccessSound) playSuccessSound();
@@ -4027,7 +4063,7 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       <div class="obox fail">${check.reason || 'Output does not match expected result.'}</div>
       ${userTableHtml}
       <div class="obox hint" style="border-color:rgba(245,158,11,.35);"><strong style="color:var(--yel);display:block;margin-bottom:3px;font-size:9px;text-transform:uppercase;letter-spacing:.8px;">💡 Hint</strong>${q.hint}</div>
-      ${changed ? `<details style="margin-top:6px;"><summary style="cursor:pointer;font-size:9px;color:var(--tx3);">▶ Translated SQL (what ran)</summary><pre style="font-size:10px;color:var(--pur);margin-top:4px;white-space:pre-wrap;background:var(--bg);padding:6px;border-radius:4px;border:1px solid var(--bdr);">${esc(sql)}</pre></details>` : ''}`;
+      ${changed ? `<details style="margin-top:6px;"><summary style="cursor:pointer;font-size:9px;color:var(--tx3);">▶ Translated SQL (what ran)</summary><div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" style="color:var(--pur);">${esc(sql)}</pre></div></details>` : ''}`;
         showToast('✗ Try again!', 'warn');
         if (window.showWrongPopups) showWrongPopups();
         if (window.playAlarmSound) playAlarmSound();
@@ -4061,7 +4097,7 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       </div>
       <div class="abody">
         <div class="aexp">${q.exp}</div>
-        <pre class="asql">${esc(q.answer)}</pre>
+        <div class="asql-wrap"><span class="copy-hint">double-click to copy</span><pre class="asql">${esc(q.answer)}</pre></div>
       </div>
     </div>`).join('');
     }
@@ -4165,6 +4201,66 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       t.textContent = msg; t.className = `toast show ${type}`;
       setTimeout(() => t.className = 'toast', 2500);
     }
+
+    // ── Double-click to copy SQL from Answers section and Output reference answers ──
+    // Prevent clicks inside SQL blocks from bubbling to acard's toggleAns
+    document.addEventListener('click', function(e) {
+      if (e.target.closest('.asql-wrap, .asql, .ans-pre-wrap, .ans-pre')) {
+        e.stopPropagation();
+      }
+    }, true);
+
+    document.addEventListener('dblclick', function(e) {
+      var pre = e.target.closest('.asql, .ans-pre');
+      if (!pre) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var text = pre.textContent || '';
+      if (!text.trim()) return;
+      var wrap = pre.closest('.asql-wrap, .ans-pre-wrap') || pre;
+
+      function showCopied() {
+        wrap.classList.add('copied');
+        showToast('📋 SQL copied!', 'ok');
+        if (window.getSelection) window.getSelection().removeAllRanges();
+        setTimeout(function() { wrap.classList.remove('copied'); }, 1800);
+      }
+
+      function fallbackCopy() {
+        // Select all content in the pre element
+        var sel = window.getSelection();
+        var range = document.createRange();
+        range.selectNodeContents(pre);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        var success = false;
+        try { success = document.execCommand('copy'); } catch(err) {}
+        sel.removeAllRanges();
+        if (success) showCopied();
+        else showToast('⚠ Press Ctrl+C to copy', 'warn');
+      }
+
+      // Use a textarea trick for most reliable cross-browser copy
+      function textareaCopy() {
+        var ta = document.createElement('textarea');
+        ta.value = text.trim();
+        ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        var success = false;
+        try { success = document.execCommand('copy'); } catch(err) {}
+        document.body.removeChild(ta);
+        if (success) showCopied();
+        else fallbackCopy();
+      }
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text.trim()).then(showCopied).catch(textareaCopy);
+      } else {
+        textareaCopy();
+      }
+    });
 
     function switchMob(panelId, el) {
       if (window.innerWidth > 768) return;
