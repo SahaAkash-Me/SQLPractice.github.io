@@ -1536,9 +1536,51 @@
       }
       
       .topbar {
-        padding: 0 10px; /* Slightly tighter topbar on mobile */
+        padding: 0 10px;
       }
     }
+
+    /* ── CONFETTI CANVAS ── */
+    #confetti-canvas {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none; z-index: 9999;
+    }
+
+    /* ── RED WARNING OVERLAY ── */
+    #warning-overlay {
+      position: fixed; inset: 0; pointer-events: none; z-index: 9990;
+      border: 0px solid transparent;
+      background: transparent;
+    }
+    #warning-overlay.alarm {
+      animation: redFlash 0.3s ease-in-out 10 alternate;
+    }
+    @keyframes redFlash {
+      0%   { background: rgba(239,68,68,0);    box-shadow: none; }
+      100% { background: rgba(239,68,68,0.18); box-shadow: inset 0 0 200px rgba(239,68,68,0.6); }
+    }
+
+    /* ── WRONG ANSWER POPUPS ── */
+    .wrong-popup {
+      position: fixed; z-index: 9995; pointer-events: none;
+      background: var(--sur); border: 1px solid #ef4444;
+      border-radius: 10px; padding: 10px 14px;
+      font-family: var(--mono); font-size: 12px; color: #ef4444;
+      box-shadow: 0 4px 24px rgba(239,68,68,0.4);
+      animation: wpIn 0.3s cubic-bezier(.17,.67,.35,1.4) forwards,
+                 wpOut 0.4s ease-in forwards 1.8s;
+      max-width: 160px; text-align: center; line-height: 1.5;
+    }
+    @keyframes wpIn  { from { transform: scale(0) rotate(-10deg); opacity:0; }
+                       to   { transform: scale(1) rotate(0deg);   opacity:1; } }
+    @keyframes wpOut { from { opacity:1; transform:translateY(0); }
+                       to   { opacity:0; transform:translateY(-18px); } }
+    .wrong-popup .wp-icon {
+      font-size: 22px; display: block; margin-bottom: 4px;
+      animation: wpSpin 0.5s ease;
+    }
+    @keyframes wpSpin { from { transform: scale(0) rotate(-180deg); }
+                        to   { transform: scale(1) rotate(0deg); } }
   </style>
 </head>
 
@@ -3680,6 +3722,8 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       <pre class="ans-pre">${esc(q.answer)}</pre>
       ${changed ? `<div style="margin-top:5px;font-size:10px;color:var(--tx3);">Your ${currentDialect.toUpperCase()} (translated):</div><pre class="ans-pre" style="color:var(--pur);">${esc(sql)}</pre>` : ''}`;
         showToast('🎉 Correct!', 'ok');
+        if (window.launchConfetti) launchConfetti();
+        if (window.playSuccessSound) playSuccessSound();
       } else {
         let userTableHtml = '';
         if (check.userResult && !check.userResult.error && check.userResult.rowCount > 0) {
@@ -3692,6 +3736,8 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       <div class="obox hint" style="border-color:rgba(245,158,11,.35);"><strong style="color:var(--yel);display:block;margin-bottom:3px;font-size:9px;text-transform:uppercase;letter-spacing:.8px;">💡 Hint</strong>${q.hint}</div>
       ${changed ? `<details style="margin-top:6px;"><summary style="cursor:pointer;font-size:9px;color:var(--tx3);">▶ Translated SQL (what ran)</summary><pre style="font-size:10px;color:var(--pur);margin-top:4px;white-space:pre-wrap;background:var(--bg);padding:6px;border-radius:4px;border:1px solid var(--bdr);">${esc(sql)}</pre></details>` : ''}`;
         showToast('✗ Try again!', 'warn');
+        if (window.showWrongPopups) showWrongPopups();
+        if (window.playAlarmSound) playAlarmSound();
       }
       saveState(); renderList();
       
@@ -3907,6 +3953,459 @@ INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-0
       document.querySelector('.theme-btn').textContent = state.theme === 'dark' ? '🌙' : '☀️';
       initDB();
     })();
+  </script>
+
+  <!-- ── CONFETTI + ALARM ENGINE ── -->
+  <canvas id="confetti-canvas"></canvas>
+  <div id="warning-overlay"></div>
+  <script>
+  (function () {
+    var canvas = document.getElementById('confetti-canvas');
+    var ctx = canvas.getContext('2d');
+    var overlay = document.getElementById('warning-overlay');
+
+    /* ═══════════════════════════════════════════════
+       CONFETTI ENGINE — random palette every launch,
+       additive: each new submit ADDS to existing pieces
+    ═══════════════════════════════════════════════ */
+    var ALL_PALETTES = [
+      ['#ff595e','#ffca3a','#6a4c93','#1982c4','#8ac926','#ff924c'],
+      ['#f72585','#7209b7','#3a0ca3','#4361ee','#4cc9f0','#06d6a0'],
+      ['#e63946','#f4a261','#2a9d8f','#264653','#e9c46a','#a8dadc'],
+      ['#d62828','#f77f00','#fcbf49','#eae2b7','#003049','#06aed5'],
+      ['#ff006e','#fb5607','#ffbe0b','#8338ec','#3a86ff','#38b000'],
+      ['#00f5d4','#00bbf9','#fee440','#f15bb5','#9b5de5','#fb5607'],
+    ];
+
+    var pieces = [];
+    var animId = null;
+    var isRunning = false;
+
+    function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
+    window.addEventListener('resize', resize); resize();
+
+    function randomPalette() {
+      return ALL_PALETTES[Math.floor(Math.random() * ALL_PALETTES.length)];
+    }
+
+    function spawnBurst(cx, cy, count, palette) {
+      for (var i = 0; i < count; i++) {
+        var angle = Math.random() * Math.PI * 2;
+        var speed = Math.random() * 18 + 5;
+        pieces.push({
+          x: cx, y: cy,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed - (Math.random() * 8 + 2),
+          r: Math.random() * 8 + 3,
+          color: palette[Math.floor(Math.random() * palette.length)],
+          rot: Math.random() * 360,
+          rotV: (Math.random() - 0.5) * 12,
+          shape: ['rect','circle','tri'][Math.floor(Math.random()*3)],
+          life: 1.0,
+          decay: Math.random() * 0.008 + 0.005   // slower decay = longer on screen
+        });
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      pieces.forEach(function (p) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot * Math.PI / 180);
+        ctx.fillStyle = p.color;
+        if (p.shape === 'rect') {
+          ctx.fillRect(-p.r, -p.r * 0.5, p.r * 2, p.r);
+        } else if (p.shape === 'circle') {
+          ctx.beginPath(); ctx.arc(0, 0, p.r, 0, 2 * Math.PI); ctx.fill();
+        } else { // triangle
+          ctx.beginPath();
+          ctx.moveTo(0, -p.r); ctx.lineTo(p.r, p.r); ctx.lineTo(-p.r, p.r);
+          ctx.closePath(); ctx.fill();
+        }
+        ctx.restore();
+      });
+    }
+
+    function update() {
+      pieces = pieces.filter(function (p) { return p.life > 0.01; });
+      pieces.forEach(function (p) {
+        p.x  += p.vx;
+        p.y  += p.vy;
+        p.vy += 0.28;   // gravity
+        p.vx *= 0.992;
+        p.rot += p.rotV;
+        p.life -= p.decay;
+      });
+    }
+
+    function startLoop() {
+      if (isRunning) return;
+      isRunning = true;
+      (function loop() {
+        update(); draw();
+        if (pieces.length > 0) {
+          animId = requestAnimationFrame(loop);
+        } else {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          isRunning = false; animId = null;
+        }
+      })();
+    }
+
+    window.launchConfetti = function () {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+      var w = canvas.width, h = canvas.height;
+
+      // Fresh random palette every single call
+      var palette = randomPalette();
+
+      // Big simultaneous burst across whole screen
+      spawnBurst(w * 0.5,  h * 0.35, 100, randomPalette());
+      spawnBurst(w * 0.1,  h * 0.25,  60, randomPalette());
+      spawnBurst(w * 0.9,  h * 0.25,  60, randomPalette());
+      spawnBurst(w * 0.25, h * 0.55,  50, randomPalette());
+      spawnBurst(w * 0.75, h * 0.55,  50, randomPalette());
+      spawnBurst(w * 0.5,  h * 0.75,  40, randomPalette());
+
+      // Continuous secondary bursts — new random palette each time
+      var extra = 0;
+      var iv = setInterval(function () {
+        spawnBurst(Math.random() * w, Math.random() * h * 0.7, 35, randomPalette());
+        if (++extra >= 10) clearInterval(iv);
+      }, 200);
+
+      // ── ROCKET FIREWORKS ──
+      // Launch 5 rockets from bottom, explode at random heights
+      var rocketDelays = [0, 250, 500, 750, 1100];
+      rocketDelays.forEach(function(delay) {
+        setTimeout(function() {
+          var rx = w * (0.15 + Math.random() * 0.7);
+          var ry = h * (0.15 + Math.random() * 0.35); // explode in upper portion
+          launchRocket(rx, ry, randomPalette());
+        }, delay);
+      });
+
+      startLoop();
+    };
+
+    // Rockets: trail rising from bottom then explode in a starburst
+    var rockets = [];
+
+    function launchRocket(targetX, targetY, palette) {
+      var startY = canvas.height + 10;
+      var rocket = {
+        x: targetX, y: startY,
+        tx: targetX, ty: targetY,
+        speed: (startY - targetY) / 28,  // frames to reach target
+        frame: 0,
+        trail: [],
+        exploded: false,
+        palette: palette
+      };
+      rockets.push(rocket);
+    }
+
+    function updateRockets() {
+      rockets = rockets.filter(function(r) { return !r.done; });
+      rockets.forEach(function(r) {
+        if (!r.exploded) {
+          r.frame++;
+          r.y -= r.speed;
+          r.trail.push({ x: r.x, y: r.y, life: 1.0 });
+          if (r.trail.length > 12) r.trail.shift();
+          r.trail.forEach(function(t) { t.life -= 0.09; });
+
+          // Draw rocket body + trail
+          r.trail.forEach(function(t) {
+            ctx.save();
+            ctx.globalAlpha = Math.max(0, t.life * 0.7);
+            ctx.fillStyle = '#fff';
+            ctx.beginPath(); ctx.arc(t.x, t.y, 2.5, 0, Math.PI*2); ctx.fill();
+            ctx.restore();
+          });
+          // Rocket head glow
+          ctx.save();
+          ctx.globalAlpha = 0.9;
+          ctx.fillStyle = '#fff';
+          ctx.shadowBlur = 8; ctx.shadowColor = '#fff';
+          ctx.beginPath(); ctx.arc(r.x, r.y, 3, 0, Math.PI*2); ctx.fill();
+          ctx.restore();
+
+          if (r.y <= r.ty) {
+            r.exploded = true;
+            // Explode: big starburst of 120 pieces
+            spawnBurst(r.x, r.y, 120, r.palette);
+            // Extra ring burst with different palette
+            spawnBurst(r.x, r.y, 60, randomPalette());
+            r.done = true;
+          }
+        }
+      });
+    }
+
+    // Override draw to also handle rockets
+    var _origDraw = draw;
+    draw = function() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Draw confetti pieces
+      pieces.forEach(function (p) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot * Math.PI / 180);
+        ctx.fillStyle = p.color;
+        if (p.shape === 'rect') {
+          ctx.fillRect(-p.r, -p.r * 0.5, p.r * 2, p.r);
+        } else if (p.shape === 'circle') {
+          ctx.beginPath(); ctx.arc(0, 0, p.r, 0, 2 * Math.PI); ctx.fill();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(0, -p.r); ctx.lineTo(p.r, p.r); ctx.lineTo(-p.r, p.r);
+          ctx.closePath(); ctx.fill();
+        }
+        ctx.restore();
+      });
+      // Draw active rockets
+      updateRockets();
+    };
+
+    // Override startLoop to keep running while rockets are active
+    startLoop = function() {
+      if (isRunning) return;
+      isRunning = true;
+      (function loop() {
+        update(); draw();
+        if (pieces.length > 0 || rockets.length > 0) {
+          animId = requestAnimationFrame(loop);
+        } else {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          isRunning = false; animId = null;
+        }
+      })();
+    };
+
+    /* ═══════════════════════════════════════════════
+       WEB AUDIO ENGINE
+    ═══════════════════════════════════════════════ */
+    var audioCtx = null;
+    function getAC() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx;
+    }
+
+    window.playSuccessSound = function () {
+      try {
+        var ac = getAC(), t = ac.currentTime;
+        // Rocket whoosh + fanfare
+        // Whoosh
+        var wLen = ac.sampleRate * 0.6;
+        var wBuf = ac.createBuffer(1, wLen, ac.sampleRate);
+        var wd = wBuf.getChannelData(0);
+        for (var i = 0; i < wLen; i++) wd[i] = (Math.random()*2-1) * (i/wLen);
+        var ws = ac.createBufferSource(); ws.buffer = wBuf;
+        var wf = ac.createBiquadFilter(); wf.type='bandpass'; wf.frequency.value=2000;
+        var wg = ac.createGain();
+        wg.gain.setValueAtTime(0.12, t);
+        wg.gain.exponentialRampToValueAtTime(0.001, t+0.55);
+        ws.connect(wf); wf.connect(wg); wg.connect(ac.destination);
+        ws.start(t); ws.stop(t+0.6);
+
+        // Ascending fanfare after whoosh
+        [[523,0.3],[659,0.42],[784,0.52],[1047,0.62],[1319,0.72],[1568,0.84]].forEach(function (fd) {
+          var o = ac.createOscillator(), g = ac.createGain();
+          o.connect(g); g.connect(ac.destination);
+          o.type = 'sine'; o.frequency.value = fd[0];
+          g.gain.setValueAtTime(0, t + fd[1]);
+          g.gain.linearRampToValueAtTime(0.22, t + fd[1] + 0.04);
+          g.gain.exponentialRampToValueAtTime(0.001, t + fd[1] + 0.42);
+          o.start(t + fd[1]); o.stop(t + fd[1] + 0.5);
+        });
+      } catch (e) {}
+    };
+
+    window.playAlarmSound = function () {
+      try {
+        var ac = getAC(), t = ac.currentTime;
+
+        // ── LAYER 1: MASSIVE SUB BOOM ──
+        var bufLen = Math.floor(ac.sampleRate * 2.0);
+        var buf = ac.createBuffer(1, bufLen, ac.sampleRate);
+        var data = buf.getChannelData(0);
+        for (var s = 0; s < bufLen; s++) {
+          data[s] = (Math.random() * 2 - 1) * Math.pow(Math.max(0, 1 - s / bufLen), 1.8);
+        }
+        var noise = ac.createBufferSource(); noise.buffer = buf;
+        var lpf = ac.createBiquadFilter(); lpf.type = 'lowpass';
+        lpf.frequency.setValueAtTime(220, t);
+        lpf.frequency.exponentialRampToValueAtTime(35, t + 1.0);
+        var boomGain = ac.createGain();
+        boomGain.gain.setValueAtTime(0, t);
+        boomGain.gain.linearRampToValueAtTime(2.5, t + 0.01);  // instant massive hit
+        boomGain.gain.exponentialRampToValueAtTime(0.001, t + 1.8);
+        noise.connect(lpf); lpf.connect(boomGain); boomGain.connect(ac.destination);
+        noise.start(t); noise.stop(t + 2.0);
+
+        // ── LAYER 2: MID EXPLOSION BODY ──
+        var mLen = Math.floor(ac.sampleRate * 1.2);
+        var mBuf = ac.createBuffer(1, mLen, ac.sampleRate);
+        var md = mBuf.getChannelData(0);
+        for (var m = 0; m < mLen; m++) {
+          md[m] = (Math.random()*2-1) * Math.pow(Math.max(0,1-m/mLen), 1.2);
+        }
+        var ms = ac.createBufferSource(); ms.buffer = mBuf;
+        var mf = ac.createBiquadFilter(); mf.type='bandpass'; mf.frequency.value=350; mf.Q.value=0.5;
+        var mg = ac.createGain();
+        mg.gain.setValueAtTime(1.4, t+0.01);
+        mg.gain.exponentialRampToValueAtTime(0.001, t+1.0);
+        ms.connect(mf); mf.connect(mg); mg.connect(ac.destination);
+        ms.start(t+0.01); ms.stop(t+1.2);
+
+        // ── LAYER 3: HIGH CRACKLE DEBRIS ──
+        [0.02, 0.08, 0.18, 0.3, 0.45, 0.62, 0.8].forEach(function(d) {
+          var cLen = Math.floor(ac.sampleRate * 0.15);
+          var cBuf = ac.createBuffer(1, cLen, ac.sampleRate);
+          var cd = cBuf.getChannelData(0);
+          for (var c=0;c<cLen;c++) cd[c]=(Math.random()*2-1)*Math.pow(1-c/cLen,1.3);
+          var cs = ac.createBufferSource(); cs.buffer = cBuf;
+          var cf = ac.createBiquadFilter(); cf.type='highpass'; cf.frequency.value=1200+Math.random()*2000;
+          var cg = ac.createGain();
+          cg.gain.setValueAtTime(0.5+Math.random()*0.4, t+d);
+          cg.gain.exponentialRampToValueAtTime(0.001, t+d+0.14);
+          cs.connect(cf); cf.connect(cg); cg.connect(ac.destination);
+          cs.start(t+d); cs.stop(t+d+0.18);
+        });
+
+        // ── LAYER 4: ALARM SIREN ──
+        [0.05,0.22,0.39,0.56,0.73,0.9,1.07,1.24].forEach(function(d,i) {
+          var o = ac.createOscillator(), g = ac.createGain();
+          o.connect(g); g.connect(ac.destination);
+          o.type='sawtooth'; o.frequency.value=[280,190,340,160][i%4];
+          g.gain.setValueAtTime(0,t+d);
+          g.gain.linearRampToValueAtTime(0.18,t+d+0.02);
+          g.gain.exponentialRampToValueAtTime(0.001,t+d+0.15);
+          o.start(t+d); o.stop(t+d+0.18);
+        });
+
+      } catch (e) {}
+    };
+
+    /* ═══════════════════════════════════════════════
+       WRONG-ANSWER EFFECTS
+    ═══════════════════════════════════════════════ */
+
+    // Twemoji CDN base — real PNG emoji images
+    var TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/';
+    var EMOJI_MAP = {
+      '💀': '1f480', '🚨': '1f6a8', '⚠️': '26a0', '❌': '274c',
+      '💥': '1f4a5', '🔥': '1f525', '🛑': '1f6d1', '🧨': '1f9e8',
+      '😱': '1f631', '🤦': '1f926', '🤖': '1f916', '📛': '1f4db',
+      '🪲': '1fab2', '🎯': '1f3af', '🧊': '1f9ca', '🤯': '1f92f',
+      '🔴': '1f534', '☠️': '2620',  '⛔': '26d4',  '🆘': '1f198',
+    };
+
+    function emojiImg(code, size) {
+      return '<img src="' + TWEMOJI_BASE + code + '.png" width="' + size + '" height="' + size + '" style="vertical-align:middle;display:block;margin:0 auto 4px;" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'inline\'">';
+    }
+
+    var WRONG_MSGS = [
+      { emoji: '💀', msg: 'Syntax Error<br>Detected!' },
+      { emoji: '🚨', msg: 'Query<br>FAILED!' },
+      { emoji: '🤦', msg: 'Wrong Output!<br>Check Logic' },
+      { emoji: '⚠️', msg: 'Result<br>Mismatch!' },
+      { emoji: '❌', msg: 'INCORRECT<br>SQL' },
+      { emoji: '😱', msg: 'Nope!<br>Try Again!' },
+      { emoji: '🧨', msg: 'BOOM!<br>Wrong Answer' },
+      { emoji: '🛑', msg: 'STOP!<br>Not Right' },
+      { emoji: '🔥', msg: 'Crash &<br>Burn!' },
+      { emoji: '💥', msg: 'ERROR<br>404: Brain?' },
+      { emoji: '🤖', msg: 'Robot<br>Disapproves' },
+      { emoji: '📛', msg: 'Invalid<br>Query!' },
+      { emoji: '🪲', msg: 'Bug<br>Detected!' },
+      { emoji: '🎯', msg: 'Missed!<br>Off Target' },
+      { emoji: '🧊', msg: 'Cold.<br>Very Cold.' },
+      { emoji: '🤯', msg: 'Mind<br>Blown!' },
+      { emoji: '☠️', msg: 'Fatal<br>Error!' },
+      { emoji: '⛔', msg: 'Access<br>Denied!' },
+      { emoji: '🆘', msg: 'SOS!<br>Help Needed' },
+    ];
+
+    var FLOAT_EMOJIS = ['💀','🚨','❌','💥','🔥','🛑','🧨','😱','⚠️','🤯','☠️','⛔'];
+
+    // Floating PNG emoji that drifts upward
+    function spawnFloatingEmoji() {
+      var key = FLOAT_EMOJIS[Math.floor(Math.random() * FLOAT_EMOJIS.length)];
+      var code = EMOJI_MAP[key];
+      var size = Math.floor(Math.random() * 36 + 32);
+      var el = document.createElement('div');
+      el.style.cssText = 'position:fixed;z-index:9993;pointer-events:none;' +
+        'left:' + (Math.random()*88+2) + '%;top:' + (Math.random()*68+8) + '%;' +
+        'opacity:1;will-change:transform,opacity;';
+      el.innerHTML = code
+        ? '<img src="' + TWEMOJI_BASE + code + '.png" width="' + size + '" height="' + size + '" onerror="this.outerHTML=\'' + key + '\'">'
+        : '<span style="font-size:' + size + 'px">' + key + '</span>';
+      document.body.appendChild(el);
+      var start = null;
+      (function drift(ts) {
+        if (!start) start = ts;
+        var prog = (ts - start) / 1600;
+        el.style.opacity = Math.max(0, 1 - prog);
+        el.style.transform = 'translateY(' + (-prog * 90) + 'px) scale(' + (1 + prog * 0.4) + ')';
+        if (prog < 1) requestAnimationFrame(drift);
+        else el.remove();
+      })(performance.now());
+    }
+
+    window.showWrongPopups = function () {
+      overlay.classList.remove('alarm');
+      void overlay.offsetWidth;
+      overlay.classList.add('alarm');
+      setTimeout(function () { overlay.classList.remove('alarm'); }, 3200);
+
+      var count = Math.floor(Math.random() * 3) + 6;
+      var used = [];
+      var positions = [
+        { top: function(){ return (Math.random()*18+3)+'%';  }, left: function(){ return (Math.random()*16+2)+'%'; } },
+        { top: function(){ return (Math.random()*18+3)+'%';  }, left: function(){ return (Math.random()*16+78)+'%'; } },
+        { top: function(){ return (Math.random()*14+40)+'%'; }, left: function(){ return (Math.random()*14+2)+'%'; } },
+        { top: function(){ return (Math.random()*14+40)+'%'; }, left: function(){ return (Math.random()*14+80)+'%'; } },
+        { top: function(){ return (Math.random()*18+3)+'%';  }, left: function(){ return (Math.random()*28+35)+'%'; } },
+        { top: function(){ return (Math.random()*14+65)+'%'; }, left: function(){ return (Math.random()*46+25)+'%'; } },
+        { top: function(){ return (Math.random()*18+33)+'%'; }, left: function(){ return (Math.random()*18+38)+'%'; } },
+        { top: function(){ return (Math.random()*14+65)+'%'; }, left: function(){ return (Math.random()*16+2)+'%'; } },
+      ];
+
+      for (var i = 0; i < count; i++) {
+        (function(ii) {
+          setTimeout(function() {
+            var idx;
+            do { idx = Math.floor(Math.random() * WRONG_MSGS.length); } while (used.indexOf(idx) !== -1 && used.length < WRONG_MSGS.length);
+            used.push(idx);
+            var m = WRONG_MSGS[idx];
+            var code = EMOJI_MAP[m.emoji];
+            var el = document.createElement('div');
+            el.className = 'wrong-popup';
+            var imgHtml = code
+              ? emojiImg(code, 38) + '<span style="display:none">' + m.emoji + '</span>'
+              : '<span class="wp-icon">' + m.emoji + '</span>';
+            el.innerHTML = imgHtml + m.msg;
+            var pos = positions[ii % positions.length];
+            el.style.top  = pos.top();
+            el.style.left = pos.left();
+            document.body.appendChild(el);
+            setTimeout(function () { el.remove(); }, 2500);
+          }, ii * 90);
+        })(i);
+      }
+
+      // 14 floating PNG emojis across the screen
+      for (var j = 0; j < 14; j++) {
+        (function(jj) { setTimeout(spawnFloatingEmoji, jj * 90); })(j);
+      }
+    };
+  })();
   </script>
 </body>
 
