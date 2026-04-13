@@ -1792,6 +1792,316 @@ INSERT INTO Employees VALUES(1,'Sarah','Connor','Sales','1985-04-12','F',95000,N
 CREATE TABLE OrdersArchive(OrderID INTEGER,ProductID INTEGER,CustomerID INTEGER,OrderDate TEXT,Sales REAL);
 INSERT INTO OrdersArchive VALUES(1001,1,1,'2024-01-05',150.00),(1002,2,2,'2024-01-10',89.99),(1002,2,2,'2024-01-10',89.99),(1003,1,3,'2024-01-15',225.00),(1005,2,1,'2024-02-01',179.98),(1005,2,1,'2024-02-01',179.98),(1007,3,6,'2024-02-10',620.00),(1008,1,2,'2024-02-15',75.00),(1010,2,8,'2024-03-01',89.99),(1010,2,8,'2024-03-01',89.99),(1011,4,9,'2024-03-05',165.00),(1012,1,3,'2024-03-10',150.00),(1014,5,2,'2024-03-20',100.00),(1016,1,6,'2024-04-05',300.00),(1020,2,10,'2024-05-01',179.98);
 `;
+// ═══════════════════════════════════════════════════════════════
+// SECTION 1 — PASTE THIS BLOCK DIRECTLY BEFORE: const QS = [
+// ═══════════════════════════════════════════════════════════════
+
+const DIALECT_RULES = {
+  sqlite: [], // native engine — no restrictions
+
+  // ── MySQL rules ──────────────────────────────────────────────
+  mysql: [
+    { severity:'error',   found:'SELECT TOP N',
+      pattern:/\bSELECT\s+TOP\s+\d+/i,
+      fix:'MySQL uses <code>LIMIT N</code> at end: <code>SELECT ... FROM t LIMIT 5</code>' },
+    { severity:'error',   found:'FETCH NEXT … ROWS',
+      pattern:/\bFETCH\s+NEXT\b/i,
+      fix:'MySQL uses <code>LIMIT N OFFSET M</code> — no FETCH NEXT syntax' },
+    { severity:'error',   found:'STRING_AGG()',
+      pattern:/\bSTRING_AGG\s*\(/i,
+      fix:"MySQL uses <code>GROUP_CONCAT(col SEPARATOR ',')</code>" },
+    { severity:'error',   found:'strftime()',
+      pattern:/\bstrftime\s*\(/i,
+      fix:"Use <code>DATE_FORMAT(col,'%Y-%m')</code>, <code>YEAR()</code>, <code>MONTH()</code>, <code>DAY()</code>" },
+    { severity:'error',   found:'julianday()',
+      pattern:/\bjulianday\s*\(/i,
+      fix:'Use <code>DATEDIFF(end_date, start_date)</code> — note: MySQL arg order reversed vs MSSQL' },
+    { severity:'error',   found:'NULLS FIRST / NULLS LAST',
+      pattern:/\bNULLS\s+(?:FIRST|LAST)\b/i,
+      fix:'MySQL lacks this — workaround: <code>ORDER BY col IS NULL ASC, col ASC</code>' },
+    { severity:'warning', found:'|| (concatenation)',
+      pattern:/\|\|/,
+      fix:'In MySQL <code>||</code> = logical OR (not concat). Use <code>CONCAT(a, b)</code>' },
+    { severity:'warning', found:'ISNULL()',
+      pattern:/\bISNULL\s*\(/i,
+      fix:'MySQL uses <code>IFNULL(col, default)</code> — ISNULL() is T-SQL syntax' },
+    { severity:'warning', found:"DATE('now')",
+      pattern:/\bDATE\s*\(\s*'now'\s*\)/i,
+      fix:"Use <code>CURDATE()</code> or <code>NOW()</code> in MySQL" },
+    { severity:'warning', found:"DATETIME('now')",
+      pattern:/\bDATETIME\s*\(\s*'now'\s*\)/i,
+      fix:"Use <code>NOW()</code> or <code>SYSDATE()</code> in MySQL" },
+    { severity:'warning', found:'INSTR(str, sub) order',
+      pattern:/\bINSTR\s*\(/i,
+      fix:'MySQL INSTR(str,sub) ✓ — but <code>LOCATE(sub, str)</code> is more readable (args flipped)' },
+  ],
+
+  // ── MSSQL / T-SQL rules ──────────────────────────────────────
+  mssql: [
+    { severity:'error',   found:'LIMIT N',
+      pattern:/\bLIMIT\s+\d+/i,
+      fix:'T-SQL: <code>SELECT TOP 5 *</code> or <code>ORDER BY x OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY</code>' },
+    { severity:'error',   found:'|| (concatenation)',
+      pattern:/\|\|/,
+      fix:'T-SQL uses <code>+</code> or <code>CONCAT(a,b)</code> — <code>||</code> is not valid T-SQL' },
+    { severity:'error',   found:'strftime()',
+      pattern:/\bstrftime\s*\(/i,
+      fix:"T-SQL: <code>FORMAT(col,'yyyy-MM')</code>, <code>YEAR()</code>, <code>MONTH()</code>, <code>DATEPART(year,col)</code>" },
+    { severity:'error',   found:'julianday()',
+      pattern:/\bjulianday\s*\(/i,
+      fix:'T-SQL: <code>DATEDIFF(day, start_date, end_date)</code>' },
+    { severity:'error',   found:'LENGTH()',
+      pattern:/\bLENGTH\s*\(/i,
+      fix:'T-SQL uses <code>LEN()</code> — note: LEN() excludes trailing spaces unlike LENGTH()' },
+    { severity:'error',   found:'SUBSTR()',
+      pattern:/\bSUBSTR\s*\(/i,
+      fix:'T-SQL uses <code>SUBSTRING(str, start, length)</code> — all 3 args required' },
+    { severity:'error',   found:'IFNULL()',
+      pattern:/\bIFNULL\s*\(/i,
+      fix:'T-SQL uses <code>ISNULL(col, default)</code> — IFNULL is MySQL syntax' },
+    { severity:'error',   found:'GROUP_CONCAT()',
+      pattern:/\bGROUP_CONCAT\s*\(/i,
+      fix:"T-SQL uses <code>STRING_AGG(col, ',')</code> (SQL Server 2017+)" },
+    { severity:'error',   found:'INSTR()',
+      pattern:/\bINSTR\s*\(/i,
+      fix:'T-SQL uses <code>CHARINDEX(substr, str)</code> — ⚠ argument order is REVERSED!' },
+    { severity:'error',   found:'EXTRACT()',
+      pattern:/\bEXTRACT\s*\(/i,
+      fix:'T-SQL uses <code>DATEPART(year, col)</code> — EXTRACT() is ANSI/PostgreSQL syntax' },
+    { severity:'error',   found:"DATE('now') / DATETIME('now')",
+      pattern:/\b(?:DATE|DATETIME)\s*\(\s*'now'\s*\)/i,
+      fix:"T-SQL: <code>GETDATE()</code> or <code>CAST(GETDATE() AS DATE)</code>" },
+    { severity:'error',   found:'NULLS FIRST / NULLS LAST',
+      pattern:/\bNULLS\s+(?:FIRST|LAST)\b/i,
+      fix:'T-SQL: <code>ORDER BY CASE WHEN col IS NULL THEN 1 ELSE 0 END, col</code>' },
+  ],
+
+  // ── PostgreSQL rules ─────────────────────────────────────────
+  pgsql: [
+    { severity:'error',   found:'SELECT TOP N',
+      pattern:/\bSELECT\s+TOP\s+\d+/i,
+      fix:'PostgreSQL uses <code>LIMIT N</code> at end of query — SELECT TOP N is T-SQL only' },
+    { severity:'error',   found:'strftime()',
+      pattern:/\bstrftime\s*\(/i,
+      fix:"PG: <code>EXTRACT(YEAR FROM col)</code> · <code>TO_CHAR(col,'YYYY-MM')</code> · <code>DATE_TRUNC('month',col)</code>" },
+    { severity:'error',   found:'julianday()',
+      pattern:/\bjulianday\s*\(/i,
+      fix:'PG: <code>end_date::DATE - start_date::DATE</code> returns integer days. Or <code>EXTRACT(EPOCH FROM age(d2,d1))/86400</code>' },
+    { severity:'error',   found:'DATEDIFF()',
+      pattern:/\bDATEDIFF\s*\(/i,
+      fix:"PG has no DATEDIFF — use <code>end_date::DATE - start_date::DATE</code>" },
+    { severity:'error',   found:'DATEADD()',
+      pattern:/\bDATEADD\s*\(/i,
+      fix:"PG uses interval arithmetic: <code>col + INTERVAL '1 day'</code> or <code>col + INTERVAL '1 month'</code>" },
+    { severity:'error',   found:'DATEPART()',
+      pattern:/\bDATEPART\s*\(/i,
+      fix:"PG uses <code>EXTRACT(YEAR FROM col)</code> or <code>DATE_PART('year', col)</code>" },
+    { severity:'error',   found:'GROUP_CONCAT()',
+      pattern:/\bGROUP_CONCAT\s*\(/i,
+      fix:"PG uses <code>STRING_AGG(col, ',')</code>" },
+    { severity:'error',   found:'IFNULL()',
+      pattern:/\bIFNULL\s*\(/i,
+      fix:'PG uses <code>COALESCE(col, default)</code> — IFNULL is MySQL-only' },
+    { severity:'error',   found:'ISNULL()',
+      pattern:/\bISNULL\s*\(/i,
+      fix:'PG uses <code>COALESCE(col, default)</code> or <code>col IS NULL</code> — ISNULL is T-SQL' },
+    { severity:'error',   found:'IIF()',
+      pattern:/\bIIF\s*\(/i,
+      fix:'PG uses <code>CASE WHEN cond THEN a ELSE b END</code> — IIF is T-SQL only' },
+    { severity:'error',   found:'LEN()',
+      pattern:/\bLEN\s*\(/i,
+      fix:'PG uses <code>LENGTH(col)</code> or <code>CHAR_LENGTH(col)</code> — LEN is T-SQL' },
+    { severity:'error',   found:"DATE('now') / DATETIME('now')",
+      pattern:/\b(?:DATE|DATETIME)\s*\(\s*'now'\s*\)/i,
+      fix:"PG uses <code>CURRENT_DATE</code> or <code>NOW()::DATE</code>" },
+    { severity:'warning', found:'SUBSTR()',
+      pattern:/\bSUBSTR\s*\(/i,
+      fix:'PG accepts SUBSTR() as alias ✓ — native syntax: <code>SUBSTRING(str FROM start FOR len)</code>' },
+    { severity:'warning', found:'INSTR()',
+      pattern:/\bINSTR\s*\(/i,
+      fix:'PG uses <code>POSITION(substr IN str)</code> or <code>STRPOS(str, substr)</code>' },
+    { severity:'warning', found:'NVL()',
+      pattern:/\bNVL\s*\(/i,
+      fix:'NVL() is Oracle — PG uses <code>COALESCE(col, default)</code>' },
+  ]
+};
+
+// Runs on raw user SQL BEFORE translation — teaches correct dialect syntax
+function validateDialectRules(rawSql, dialect) {
+  if (dialect === 'sqlite') return [];
+  const rules = DIALECT_RULES[dialect] || [];
+  const violations = [];
+  // Strip string literals + comments to prevent false positives inside quoted text
+  const stripped = rawSql
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
+  rules.forEach(rule => {
+    const pat = new RegExp(rule.pattern.source, 'i');
+    if (pat.test(stripped)) violations.push(rule);
+  });
+  return violations;
+}
+
+// Builds the dialect violations panel injected above query results
+function buildDialectRulesHtml(violations, dialect) {
+  if (dialect === 'sqlite') return '';
+  const dlabels = { mysql:'MySQL', mssql:'T-SQL (MSSQL)', pgsql:'PostgreSQL' };
+  const dcolors  = { mysql:'#f59e0b', mssql:'#a855f7', pgsql:'#6baed6' };
+  const dlabel   = dlabels[dialect] || dialect;
+  const dcolor   = dcolors[dialect] || 'var(--acc)';
+
+  if (!violations.length) {
+    return `<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.2);border-radius:5px;margin-bottom:7px;font-size:10px;color:var(--grn);">
+      ✅ <strong>${dlabel} Syntax OK</strong> — no dialect violations detected
+    </div>`;
+  }
+
+  const errors   = violations.filter(v => v.severity === 'error');
+  const warnings = violations.filter(v => v.severity === 'warning');
+  const headBg   = errors.length ? 'rgba(239,68,68,.08)' : 'rgba(245,158,11,.08)';
+  const headBdr  = errors.length ? 'rgba(239,68,68,.3)'  : 'rgba(245,158,11,.3)';
+  const icon     = errors.length ? '🚨' : '⚠️';
+  const errHtml  = errors.length   ? `<span style="color:var(--red);font-weight:700;">${errors.length} error${errors.length>1?'s':''}</span>` : '';
+  const warnHtml2 = warnings.length ? `<span style="color:var(--yel);">${warnings.length} warning${warnings.length>1?'s':''}</span>` : '';
+  const summary  = [errHtml,warnHtml2].filter(Boolean).join(' <span style="color:var(--tx3);margin:0 2px;">·</span> ');
+
+  const rows = violations.map(v => {
+    const iErr = v.severity === 'error';
+    const bg   = iErr ? 'rgba(239,68,68,.05)' : 'rgba(245,158,11,.05)';
+    const col  = iErr ? 'var(--red)' : 'var(--yel)';
+    const lbl  = iErr ? 'ERROR' : 'WARN';
+    return `<div style="display:flex;gap:8px;padding:6px 10px;border-bottom:1px solid var(--bdr);background:${bg};">
+      <span style="font-size:8px;font-weight:700;padding:2px 6px;border-radius:3px;color:${col};border:1px solid ${col};flex-shrink:0;margin-top:2px;line-height:1.4;white-space:nowrap;">${lbl}</span>
+      <div style="font-size:10px;line-height:1.6;">
+        <div style="color:var(--acc);font-weight:600;font-family:var(--mono);">${v.found}</div>
+        <div style="color:var(--tx2);margin-top:1px;">${v.fix}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div style="border:1px solid ${headBdr};border-radius:6px;overflow:hidden;margin-bottom:8px;">
+    <div style="padding:6px 10px;background:${headBg};border-bottom:1px solid ${headBdr};display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;"
+         onclick="var b=this.nextSibling;b.style.display=b.style.display==='none'?'block':'none';this.querySelector('.drv-chev').textContent=b.style.display==='none'?'▸ expand':'▾ collapse'">
+      <span style="font-size:10px;font-weight:600;">${icon} <span style="color:${dcolor};">${dlabel}</span> Dialect Check — ${summary}</span>
+      <span class="drv-chev" style="font-size:9px;color:var(--tx3);">▾ collapse</span>
+    </div>
+    <div>${rows}</div>
+  </div>`;
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// SECTION 2 — REPLACE your existing doRun() with this version
+// Changes: adds violations check + injects dialectRulesHtml
+// ═══════════════════════════════════════════════════════════════
+
+function doRun() {
+  if (!DB) { showToast('⚠ Database loading…', 'warn'); return; }
+  if (!state.curQ) { showToast('⚠ Select a question first'); return; }
+  const { sql: rawSQL, isSelection } = getSQLToRun();
+  if (!rawSQL) { showToast('✏ Write some SQL first'); return; }
+  const { sql, changed, warnings } = translateSQL(rawSQL, currentDialect);
+  const tableErr = validateTables(sql);
+  const container = document.getElementById('r-output');
+  if (tableErr) {
+    container.innerHTML = `<div class="om"><span class="ob fail">✗ Restricted</span></div><div class="obox fail"><strong>⛔ Table Access Restricted:</strong><br/>${tableErr}</div>`;
+    return;
+  }
+  // ── NEW: dialect rule check on raw user SQL ──
+  const violations = validateDialectRules(rawSQL, currentDialect);
+  const dialectRulesHtml = buildDialectRulesHtml(violations, currentDialect);
+  // ─────────────────────────────────────────────
+  const dialectBadge = changed ? `<span class="xlat-badge ${currentDialect}">⚡ ${currentDialect.toUpperCase()} translated</span>` : '';
+  const selBadge = isSelection ? `<span style="color:var(--pur);font-size:10px;margin-left:4px;">▶ Selection only</span>` : '';
+  const warnHtml = warnings.length ? `<div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.25);border-radius:5px;padding:6px 9px;margin-bottom:6px;font-size:10px;color:var(--yel);line-height:1.7;">${warnings.join('<br/>')}</div>` : '';
+  const result = execSQL(sql);
+  if (result.error) {
+    container.innerHTML = `<div class="om"><span class="ob fail">✗ Error</span>${dialectBadge}${selBadge}</div>${dialectRulesHtml}${warnHtml}<div class="obox fail"><strong>SQL Error:</strong><br/>${esc(result.error)}<br/><br/><span style="color:var(--tx3);font-size:10px;">Check syntax and table/column names above.</span>${changed ? `<br/><details style="margin-top:6px;"><summary style="cursor:pointer;font-size:10px;color:var(--tx3);">Translated SQL (what ran)</summary><div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" style="color:var(--acc);">${esc(sql)}</pre></div></details>` : ''}
+    </div>`;
+  } else {
+    container.innerHTML = `<div class="om"><span class="ob info">▶ Executed</span><span>${result.elapsed}ms · ${result.rowCount} rows</span>${dialectBadge}${selBadge}</div>${dialectRulesHtml}${warnHtml}${makeTable(result)}${changed ? `<details style="margin-top:6px;padding:0 2px;"><summary style="cursor:pointer;font-size:9px;color:var(--tx3);">▶ Translated SQL</summary><div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" style="color:var(--acc);">${esc(sql)}</pre></div></details>` : ''}`;
+  }
+  if (window.innerWidth <= 768) switchMob('rp');
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// SECTION 3 — REPLACE your existing doSubmit() with this version
+// Changes: adds violations check + injects dialectRulesHtml
+// ═══════════════════════════════════════════════════════════════
+
+function doSubmit() {
+  if (!DB) { showToast('⚠ Database loading…', 'warn'); return; }
+  if (!state.curQ) { showToast('⚠ Select a question first'); return; }
+  const rawSQL = document.getElementById('editor').value.trim();
+  if (!rawSQL) { showToast('✏ Write some SQL first'); return; }
+  const { sql, changed, warnings } = translateSQL(rawSQL, currentDialect);
+  const tableErr = validateTables(sql);
+  const container = document.getElementById('r-output');
+  if (tableErr) {
+    container.innerHTML = `<div class="om"><span class="ob fail">✗ Restricted</span></div><div class="obox fail"><strong>⛔ Table Access Restricted:</strong><br/>${tableErr}</div>`;
+    return;
+  }
+  state.attempts++;
+  const q = state.curQ;
+  // ── NEW: dialect rule check on raw user SQL ──
+  const violations = validateDialectRules(rawSQL, currentDialect);
+  const dialectRulesHtml = buildDialectRulesHtml(violations, currentDialect);
+  // ─────────────────────────────────────────────
+  const check = checkAnswer(sql, q.answer);
+  const dialectBadge = changed ? `<span class="xlat-badge ${currentDialect}">⚡ ${currentDialect.toUpperCase()} translated</span>` : '';
+
+  if (check.passed) {
+    if (!state.solved.has(q.id)) { state.solved.add(q.id); state.correctAttempts++; state.todaySolved++; }
+    const noteHtml = check.note ? `<div style="font-size:10px;color:var(--yel);margin-bottom:4px;">ℹ ${check.note}</div>` : '';
+    const sqliteAns = q.answer;
+    const mysqlAns = translateToDialect(q.answer, 'mysql');
+    const mssqlAns = translateToDialect(q.answer, 'mssql');
+    const pgsqlAns = translateToDialect(q.answer, 'pgsql');
+
+    container.innerHTML = `
+      <div class="om"><span class="ob ok">✓ Correct!</span>${dialectBadge}</div>
+      ${noteHtml}
+      ${dialectRulesHtml}
+      ${check.userResult ? makeTable(check.userResult, true) : ''}
+      <div class="exp-box"><strong>💡 Key Concept</strong>${q.exp}</div>
+      <div style="margin-top:8px;">
+        <div style="font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px;font-weight:600;">📖 Reference Answers — All Dialects</div>
+        <div style="display:flex;gap:4px;margin-bottom:4px;flex-wrap:wrap;">
+          <button onclick="showRefTab(this,'ref-sqlite')" class="ref-tab-btn active" style="font-size:9px;padding:2px 9px;border-radius:4px;background:var(--acc);border:1px solid var(--acc);color:#fff;cursor:pointer;font-family:var(--mono);">SQLite</button>
+          <button onclick="showRefTab(this,'ref-mysql')" class="ref-tab-btn" style="font-size:9px;padding:2px 9px;border-radius:4px;background:transparent;border:1px solid rgba(245,158,11,.4);color:var(--yel);cursor:pointer;font-family:var(--mono);">MySQL</button>
+          <button onclick="showRefTab(this,'ref-mssql')" class="ref-tab-btn" style="font-size:9px;padding:2px 9px;border-radius:4px;background:transparent;border:1px solid rgba(168,85,247,.4);color:var(--pur);cursor:pointer;font-family:var(--mono);">MSSQL</button>
+          <button onclick="showRefTab(this,'ref-pgsql')" class="ref-tab-btn" style="font-size:9px;padding:2px 9px;border-radius:4px;background:transparent;border:1px solid rgba(51,103,145,.5);color:#6baed6;cursor:pointer;font-family:var(--mono);">PostgreSQL</button>
+        </div>
+        <div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" id="ref-sqlite">${esc(sqliteAns)}</pre></div>
+        <div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" id="ref-mysql" style="display:none;color:#f59e0b;">${esc(mysqlAns)}</pre></div>
+        <div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" id="ref-mssql" style="display:none;color:#a855f7;">${esc(mssqlAns)}</pre></div>
+        <div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" id="ref-pgsql" style="display:none;color:#6baed6;">${esc(pgsqlAns)}</pre></div>
+      </div>
+      ${changed ? `<div style="margin-top:5px;font-size:10px;color:var(--tx3);">Your ${currentDialect.toUpperCase()} (translated):</div><div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" style="color:var(--pur);">${esc(sql)}</pre></div>` : ''}`;
+    showToast('🎉 Correct!', 'ok');
+    if (window.launchConfetti) launchConfetti();
+    if (window.playSuccessSound) playSuccessSound();
+  } else {
+    let userTableHtml = '';
+    if (check.userResult && !check.userResult.error && check.userResult.rowCount > 0) {
+      userTableHtml = `<div style="font-size:10px;color:var(--tx3);margin-bottom:4px;margin-top:4px;">Your result:</div>${makeTable(check.userResult)}`;
+    }
+    container.innerHTML = `
+      <div class="om"><span class="ob fail">✗ Incorrect</span>${dialectBadge}</div>
+      ${dialectRulesHtml}
+      <div class="obox fail">${check.reason || 'Output does not match expected result.'}</div>
+      ${userTableHtml}
+      <div class="obox hint" style="border-color:rgba(245,158,11,.35);"><strong style="color:var(--yel);display:block;margin-bottom:3px;font-size:9px;text-transform:uppercase;letter-spacing:.8px;">💡 Hint</strong>${q.hint}</div>
+      ${changed ? `<details style="margin-top:6px;"><summary style="cursor:pointer;font-size:9px;color:var(--tx3);">▶ Translated SQL (what ran)</summary><div class="ans-pre-wrap"><span class="copy-hint">double-click to copy</span><pre class="ans-pre" style="color:var(--pur);">${esc(sql)}</pre></div></details>` : ''}`;
+    showToast('✗ Try again!', 'warn');
+    if (window.showWrongPopups) showWrongPopups();
+    if (window.playAlarmSound) playAlarmSound();
+  }
+  saveState(); renderList();
+  if (window.innerWidth <= 768) switchMob('rp');
+}
 
     const QS = [
       {
